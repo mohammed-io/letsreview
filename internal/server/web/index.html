@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>letsreview</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="mark">lr</span>
+          <div>
+            <h1>letsreview</h1>
+            <p id="repo-label">local repo</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-title">Comparison</div>
+          <label>
+            Mode
+            <select id="mode">
+              <option value="working">Working tree vs HEAD</option>
+              <option value="staged">Staged changes</option>
+              <option value="refs">Two refs</option>
+            </select>
+          </label>
+          <div class="refs" id="refs">
+            <label>
+              Base
+              <input id="base-ref" placeholder="main">
+            </label>
+            <label>
+              Head
+              <input id="head-ref" placeholder="feature-branch">
+            </label>
+          </div>
+          <button id="create-session">Create review</button>
+        </section>
+
+        <section class="panel grow">
+          <div class="panel-title">Reviews</div>
+          <div id="sessions" class="sessions"></div>
+        </section>
+      </aside>
+
+      <section class="content">
+        <header class="topbar">
+          <div>
+            <h2 id="session-title">No review loaded</h2>
+            <p id="session-summary">Create a review to inspect diffs.</p>
+          </div>
+          <div class="stats">
+            <span id="stat-files">0 files</span>
+            <span id="stat-add">+0</span>
+            <span id="stat-del">-0</span>
+          </div>
+        </header>
+
+        <div class="workspace">
+          <nav class="files" id="files"></nav>
+          <section class="diff-area">
+            <div class="diff-toolbar">
+              <span id="active-file">No file selected</span>
+              <button id="explain-selection">Explain selection</button>
+            </div>
+            <canvas id="diff-canvas" width="1200" height="720"></canvas>
+          </section>
+          <aside class="assistant">
+            <div class="panel-title">AI handoff</div>
+            <p id="explanation">Select diff rows, then ask for an explanation.</p>
+            <textarea id="feedback" placeholder="Add review feedback for selected lines"></textarea>
+            <button id="save-feedback">Save feedback</button>
+            <button id="export-agent">Export agent payload</button>
+            <pre id="agent-payload"></pre>
+          </aside>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
