@@ -22,10 +22,11 @@ const (
 )
 
 type Request struct {
-	RepoPath string `json:"repoPath"`
-	Mode     Mode   `json:"mode"`
-	BaseRef  string `json:"baseRef"`
-	HeadRef  string `json:"headRef"`
+	RepoPath     string `json:"repoPath"`
+	Mode         Mode   `json:"mode"`
+	BaseRef      string `json:"baseRef"`
+	HeadRef      string `json:"headRef"`
+	ContextLines int    `json:"contextLines,omitempty"`
 }
 
 type File struct {
@@ -193,19 +194,30 @@ func ParseUnified(diff string) []File {
 }
 
 func diffArgs(req Request) ([]string, error) {
+	contextArg := fmt.Sprintf("--unified=%d", normalizedContextLines(req.ContextLines))
 	switch req.Mode {
 	case "", ModeWorking:
-		return []string{"diff", "--no-ext-diff", "--unified=80", "HEAD", "--"}, nil
+		return []string{"diff", "--no-ext-diff", contextArg, "HEAD", "--"}, nil
 	case ModeStaged:
-		return []string{"diff", "--no-ext-diff", "--cached", "--unified=80", "--"}, nil
+		return []string{"diff", "--no-ext-diff", "--cached", contextArg, "--"}, nil
 	case ModeRefs:
 		if strings.TrimSpace(req.BaseRef) == "" || strings.TrimSpace(req.HeadRef) == "" {
 			return nil, errors.New("baseRef and headRef are required for refs mode")
 		}
-		return []string{"diff", "--no-ext-diff", "--unified=80", req.BaseRef, req.HeadRef, "--"}, nil
+		return []string{"diff", "--no-ext-diff", contextArg, req.BaseRef, req.HeadRef, "--"}, nil
 	default:
 		return nil, fmt.Errorf("unsupported diff mode %q", req.Mode)
 	}
+}
+
+func normalizedContextLines(value int) int {
+	if value <= 0 {
+		return 3
+	}
+	if value > 200 {
+		return 200
+	}
+	return value
 }
 
 func ensureGitRepo(ctx context.Context, repo string) error {

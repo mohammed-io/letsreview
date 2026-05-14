@@ -8,58 +8,47 @@
   </head>
   <body>
     <main class="shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <span class="mark">lr</span>
-          <div>
-            <h1>letsreview</h1>
-            <p id="repo-label">local repo</p>
+      <section class="content">
+        <header class="topbar">
+          <div class="brand">
+            <span class="mark">lr</span>
+            <div>
+              <h1>letsreview</h1>
+              <p id="repo-label">local repo</p>
+            </div>
           </div>
-        </div>
-
-        <section class="panel">
-          <div class="panel-title">Mode</div>
+          <div class="review-title">
+            <h2 id="session-title">No review loaded</h2>
+            <p id="session-summary">Create a review to inspect diffs.</p>
+          </div>
           <div class="mode-toggle">
             <button id="mode-live" class="mode-btn active">Live</button>
             <button id="mode-sessions" class="mode-btn">Sessions</button>
           </div>
-        </section>
-
-        <section class="panel" id="comparison-panel">
-          <div class="panel-title">Comparison</div>
-          <label>
-            Diff Type
-            <select id="mode">
-              <option value="working">Working tree vs HEAD</option>
-              <option value="staged">Staged changes</option>
-              <option value="refs">Two refs</option>
-            </select>
-          </label>
-          <div class="refs" id="refs">
+          <section class="comparison" id="comparison-panel">
             <label>
-              Base
-              <input id="base-ref" placeholder="main">
+              Diff Type
+              <select id="mode">
+                <option value="working">Working tree vs HEAD</option>
+                <option value="staged">Staged changes</option>
+                <option value="refs">Two refs</option>
+              </select>
             </label>
-            <label>
-              Head
-              <input id="head-ref" placeholder="feature-branch">
-            </label>
-          </div>
-          <button id="create-session">Create review</button>
-        </section>
-
-        <section class="panel grow" id="sessions-panel">
-          <div class="panel-title">Reviews</div>
-          <div id="sessions" class="sessions"></div>
-        </section>
-      </aside>
-
-      <section class="content">
-        <header class="topbar">
-          <div>
-            <h2 id="session-title">No review loaded</h2>
-            <p id="session-summary">Create a review to inspect diffs.</p>
-          </div>
+            <div class="refs" id="refs">
+              <label>
+                Base
+                <input id="base-ref" placeholder="main">
+              </label>
+              <label>
+                Head
+                <input id="head-ref" placeholder="feature-branch">
+              </label>
+            </div>
+            <button id="create-session">Create review</button>
+          </section>
+          <section class="sessions-popover" id="sessions-panel">
+            <div id="sessions" class="sessions"></div>
+          </section>
           <div class="stats">
             <span id="stat-files">0 files</span>
             <span id="stat-add">+0</span>
@@ -72,18 +61,51 @@
           <section class="diff-area">
             <div class="diff-toolbar">
               <span id="active-file">No file selected</span>
-              <button id="explain-selection">Explain selection</button>
+              <div class="diff-actions">
+                <label class="viewed-toggle">
+                  <input id="viewed-file" type="checkbox">
+                  Viewed
+                </label>
+                <button id="explain-selection" class="secondary">Explain selection</button>
+                <button id="show-file-comments" class="secondary">Comments</button>
+                <button id="export-agent" class="secondary">Export agent payload</button>
+                <button id="clear-session" class="secondary danger">Clear session</button>
+              </div>
             </div>
-            <canvas id="diff-canvas" width="1200" height="720"></canvas>
+            <div class="diff-stage">
+              <canvas id="diff-canvas" width="1200" height="720"></canvas>
+              <section class="inline-review" id="inline-review" aria-label="Review feedback">
+                <div class="inline-review-header">
+                  <strong id="inline-review-title">Add review comment</strong>
+                  <button id="close-feedback" class="secondary" aria-label="Close feedback">Close</button>
+                </div>
+                <p id="explanation">Select diff rows, then ask for an explanation.</p>
+                <div class="comment-list" id="comment-list"></div>
+                <textarea id="feedback" placeholder="Leave a comment"></textarea>
+                <div class="inline-review-actions">
+                  <button id="save-feedback">Save feedback <kbd class="shortcut"></kbd></button>
+                </div>
+              </section>
+            </div>
           </section>
-          <aside class="assistant">
-            <div class="panel-title">AI handoff</div>
-            <p id="explanation">Select diff rows, then ask for an explanation.</p>
-            <textarea id="feedback" placeholder="Add review feedback for selected lines"></textarea>
-            <button id="save-feedback">Save feedback</button>
-            <button id="export-agent">Export agent payload</button>
-            <pre id="agent-payload"></pre>
-          </aside>
+          <section class="modal" id="comments-modal" aria-label="File comments">
+            <div class="modal-dialog">
+              <div class="modal-header">
+                <strong>File comments</strong>
+                <button id="close-comments-modal" class="secondary">Close</button>
+              </div>
+              <div class="comment-list" id="file-comment-list"></div>
+            </div>
+          </section>
+          <section class="modal" id="agent-payload-modal" aria-label="Agent payload">
+            <div class="modal-dialog">
+              <div class="modal-header">
+                <strong>Agent payload</strong>
+                <button id="close-agent-payload" class="secondary">Close</button>
+              </div>
+              <pre id="agent-payload"></pre>
+            </div>
+          </section>
         </div>
       </section>
     </main>

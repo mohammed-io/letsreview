@@ -2,7 +2,10 @@ package server
 
 import (
 	"bytes"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,11 +41,272 @@ func TestSessionFeedbackAndAgentPayload(t *testing.T) {
 	}
 
 	payload := getJSON[map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/agent-payload")
-	if payload["repoPath"] != repo {
-		t.Fatalf("expected repo path in payload, got %#v", payload["repoPath"])
+	if _, ok := payload["repoPath"]; ok {
+		t.Fatalf("expected compact payload without repo path, got %#v", payload)
 	}
-	if !strings.Contains(payload["directive"].(string), "Apply requested changes") {
-		t.Fatalf("expected agent directive, got %#v", payload["directive"])
+	if _, ok := payload["session"]; ok {
+		t.Fatalf("expected compact payload without session diff data, got %#v", payload)
+	}
+	if _, ok := payload["directive"]; ok {
+		t.Fatalf("expected compact payload without directive, got %#v", payload)
+	}
+	comments, ok := payload["comments"].([]any)
+	if !ok {
+		t.Fatalf("expected comments array in payload, got %#v", payload["comments"])
+	}
+	if len(comments) != 1 {
+		t.Fatalf("expected one exported comment, got %#v", comments)
+	}
+	comment, ok := comments[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected exported comment object, got %#v", comments[0])
+	}
+	if comment["filePath"] != "main.go" || comment["body"] != "Rename this for clarity." {
+		t.Fatalf("expected comment body and file path only, got %#v", comment)
+	}
+	if comment["startLine"] != float64(1) || comment["endLine"] != float64(2) {
+		t.Fatalf("expected comment line range, got %#v", comment)
+	}
+	if _, ok := comment["id"]; ok {
+		t.Fatalf("expected exported comment without internal id, got %#v", comment)
+	}
+	if _, ok := comment["sessionId"]; ok {
+		t.Fatalf("expected exported comment without session id, got %#v", comment)
+	}
+}
+
+func TestDeleteFeedbackRemovesCommentFromAgentPayload(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	session := postJSON[Session](t, app.Handler(), "/api/sessions", map[string]string{"mode": "working"})
+	feedback := postJSON[Feedback](t, app.Handler(), "/api/sessions/"+session.ID+"/feedback", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 3,
+		"endLine":   3,
+		"body":      "Remove this comment.",
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/sessions/"+session.ID+"/feedback/"+feedback.ID, nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE feedback returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	payload := getJSON[map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/agent-payload")
+	comments, ok := payload["comments"].([]any)
+	if !ok {
+		t.Fatalf("expected comments array in payload, got %#v", payload["comments"])
+	}
+	if len(comments) != 0 {
+		t.Fatalf("expected deleted comment to be removed, got %#v", comments)
+	}
+}
+
+func TestDeleteSessionRemovesFeedbackAndSession(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	session := postJSON[Session](t, app.Handler(), "/api/sessions", map[string]string{"mode": "working"})
+	postJSON[Feedback](t, app.Handler(), "/api/sessions/"+session.ID+"/feedback", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   1,
+		"body":      "Clear me.",
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/sessions/"+session.ID, nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE session returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	sessions := getJSON[[]Session](t, app.Handler(), "/api/sessions")
+	if len(sessions) != 0 {
+		t.Fatalf("expected deleted session to be removed, got %#v", sessions)
+	}
+}
+
+func TestProjectRegistrationUsesMD5PathIDAndReusesDuplicates(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	first := postJSON[Project](t, app.Handler(), "/api/projects", map[string]string{"repoPath": repo})
+	second := postJSON[Project](t, app.Handler(), "/api/projects", map[string]string{"repoPath": repo})
+	expected := md5Hex(repo)
+
+	if first.ID != expected {
+		t.Fatalf("expected md5 project id %q, got %q", expected, first.ID)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected duplicate repo registration to reuse project id, got %q and %q", first.ID, second.ID)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+first.ID+"/heartbeat", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("heartbeat returned %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProjectScopedSessionsCanUseMultipleRepos(t *testing.T) {
+	repoA := makeRepo(t)
+	repoB := makeRepo(t)
+	app, err := New(repoA)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	projectB := postJSON[Project](t, app.Handler(), "/api/projects", map[string]string{"repoPath": repoB})
+	sessionB := postJSON[Session](t, app.Handler(), "/api/projects/"+projectB.ID+"/sessions", map[string]string{"mode": "working"})
+	if sessionB.Meta["repo"] != filepath.Base(repoB) {
+		t.Fatalf("expected scoped session to use repo B, got %#v", sessionB.Meta)
+	}
+
+	liveB := getJSON[map[string]any](t, app.Handler(), "/api/projects/"+projectB.ID+"/live")
+	metaB, ok := liveB["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected project B live metadata, got %#v", liveB["meta"])
+	}
+	if metaB["projectID"] != projectB.ID || metaB["repo"] != filepath.Base(repoB) {
+		t.Fatalf("expected project B live response, got %#v", metaB)
+	}
+
+	legacyLive := getJSON[map[string]any](t, app.Handler(), "/api/live")
+	legacyMeta, ok := legacyLive["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected legacy live metadata, got %#v", legacyLive["meta"])
+	}
+	if legacyMeta["repo"] != filepath.Base(repoA) {
+		t.Fatalf("expected legacy route to use default repo A, got %#v", legacyMeta)
+	}
+}
+
+func TestLiveDiffExposesRepoNameForUI(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	body := getJSON[map[string]any](t, app.Handler(), "/api/live")
+	meta, ok := body["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected live diff metadata, got %#v", body["meta"])
+	}
+	if meta["repo"] != filepath.Base(repo) {
+		t.Fatalf("expected repo label %q, got %#v", filepath.Base(repo), meta["repo"])
+	}
+	if body["summary"] == "" {
+		t.Fatalf("expected live summary for UI, got %#v", body["summary"])
+	}
+}
+
+func TestLiveDiffAcceptsContextLineQuery(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/live?contextLines=20", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET live diff returned %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func md5Hex(value string) string {
+	sum := md5.Sum([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestStaticUIKeepsCanvasDiffRenderer(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / returned %d: %s", rec.Code, rec.Body.String())
+	}
+	body, err := io.ReadAll(rec.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	html := string(body)
+	if !strings.Contains(html, `<canvas id="diff-canvas"`) {
+		t.Fatalf("expected canvas diff renderer in static UI")
+	}
+	if !strings.Contains(html, `id="inline-review"`) {
+		t.Fatalf("expected inline review form in static UI")
+	}
+	if strings.Contains(html, `class="assistant"`) {
+		t.Fatalf("expected feedback to be inline, not in a side assistant panel")
+	}
+	if strings.Contains(html, "<aside") {
+		t.Fatalf("expected no sidebar aside in static UI")
+	}
+	if !strings.Contains(html, `id="viewed-file"`) {
+		t.Fatalf("expected viewed checkbox in static UI")
+	}
+	if !strings.Contains(html, `id="show-file-comments"`) {
+		t.Fatalf("expected file comments button in static UI")
+	}
+	if !strings.Contains(html, `id="agent-payload-modal"`) {
+		t.Fatalf("expected agent payload modal in static UI")
+	}
+	if !strings.Contains(html, `id="clear-session"`) {
+		t.Fatalf("expected clear session button in static UI")
+	}
+	if strings.Contains(html, `id="context-lines"`) {
+		t.Fatalf("expected no context selector in static UI")
+	}
+	if !strings.Contains(html, `/app.js`) || !strings.Contains(html, `/styles.css`) {
+		t.Fatalf("expected app assets to be linked in static UI")
+	}
+}
+
+func TestWebUIRootServesStaticFilesFromDisk(t *testing.T) {
+	repo := makeRepo(t)
+	webRoot := t.TempDir()
+	t.Setenv("WEB_UI_ROOT", webRoot)
+	if err := os.WriteFile(filepath.Join(webRoot, "index.html"), []byte("dev static root"), 0o644); err != nil {
+		t.Fatalf("write dev index: %v", err)
+	}
+
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / returned %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.TrimSpace(rec.Body.String()) != "dev static root" {
+		t.Fatalf("expected WEB_UI_ROOT asset, got %q", rec.Body.String())
 	}
 }
 

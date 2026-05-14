@@ -62,3 +62,40 @@ func TestExplainSelectionSummarizesObservableSelectedLines(t *testing.T) {
 		t.Fatalf("expected selected line counts in summary, got %q", summary)
 	}
 }
+
+func TestDiffArgsDefaultToGitHubLikeContext(t *testing.T) {
+	args, err := diffArgs(Request{Mode: ModeWorking})
+	if err != nil {
+		t.Fatalf("diff args: %v", err)
+	}
+	if !contains(args, "--unified=3") {
+		t.Fatalf("expected GitHub-like default context, got %#v", args)
+	}
+}
+
+func TestDiffArgsHonorCustomContextWithLimit(t *testing.T) {
+	args, err := diffArgs(Request{Mode: ModeStaged, ContextLines: 20})
+	if err != nil {
+		t.Fatalf("diff args: %v", err)
+	}
+	if !contains(args, "--unified=20") {
+		t.Fatalf("expected custom context, got %#v", args)
+	}
+
+	args, err = diffArgs(Request{Mode: ModeWorking, ContextLines: 500})
+	if err != nil {
+		t.Fatalf("diff args: %v", err)
+	}
+	if !contains(args, "--unified=200") {
+		t.Fatalf("expected capped context, got %#v", args)
+	}
+}
+
+func contains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
