@@ -79,6 +79,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.health)
+	s.mux.HandleFunc("GET /api/live", s.liveDiff)
 	s.mux.HandleFunc("GET /api/sessions", s.listSessions)
 	s.mux.HandleFunc("POST /api/sessions", s.createSession)
 	s.mux.HandleFunc("GET /api/sessions/{id}", s.getSession)
@@ -92,6 +93,29 @@ func (s *Server) routes() {
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "repoPath": s.repoPath})
+}
+
+func (s *Server) liveDiff(w http.ResponseWriter, r *http.Request) {
+	req := gitdiff.Request{
+		RepoPath: s.repoPath,
+		Mode:     gitdiff.ModeWorking,
+	}
+
+	files, err := gitdiff.Load(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	result := map[string]any{
+		"title":   "Working tree vs HEAD",
+		"files":   files,
+		"summary": gitdiff.Summary(files),
+		"stats":   stats(files),
+		"meta":    map[string]string{"repo": filepath.Base(s.repoPath)},
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {

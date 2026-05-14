@@ -1,15 +1,15 @@
 :root {
   color-scheme: dark;
-  --bg: #111314;
-  --panel: #191d1f;
-  --panel-2: #202528;
-  --line: #2c3337;
-  --text: #f3f0e8;
-  --muted: #9aa6a6;
-  --accent: #e1b96b;
-  --blue: #78a6d8;
-  --green: #78c698;
-  --red: #ef8f88;
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #21262d;
+  --line: #30363d;
+  --text: #c9d1d9;
+  --muted: #8b949e;
+  --accent: #f0883e;
+  --blue: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
 }
 
 * {
@@ -45,6 +45,26 @@ button.secondary {
   background: var(--panel-2);
   color: var(--text);
   border-color: var(--line);
+}
+
+.mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.mode-btn {
+  background: var(--panel-2);
+  color: var(--muted);
+  border-color: var(--line);
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+.mode-btn.active {
+  background: var(--accent);
+  color: #17130b;
+  border-color: #60491f;
 }
 
 .shell {
@@ -113,7 +133,7 @@ p {
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #15191b;
+  background: #161b22;
 }
 
 .panel.grow {
@@ -199,7 +219,7 @@ textarea {
   gap: 24px;
   padding: 18px 24px;
   border-bottom: 1px solid var(--line);
-  background: #131617;
+  background: #161b22;
 }
 
 .stats {
@@ -234,7 +254,7 @@ textarea {
 .files {
   padding: 12px;
   border-right: 1px solid var(--line);
-  background: #151819;
+  background: #161b22;
 }
 
 .file small {
@@ -248,7 +268,7 @@ textarea {
   min-width: 0;
   display: grid;
   grid-template-rows: auto 1fr;
-  background: #101213;
+  background: #0d1117;
 }
 
 .diff-toolbar {
@@ -290,7 +310,7 @@ textarea {
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #101213;
+  background: #0d1117;
   color: var(--muted);
   font-size: 12px;
 }

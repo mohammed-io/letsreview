@@ -18,9 +18,17 @@
         </div>
 
         <section class="panel">
+          <div class="panel-title">Mode</div>
+          <div class="mode-toggle">
+            <button id="mode-live" class="mode-btn active">Live</button>
+            <button id="mode-sessions" class="mode-btn">Sessions</button>
+          </div>
+        </section>
+
+        <section class="panel" id="comparison-panel">
           <div class="panel-title">Comparison</div>
           <label>
-            Mode
+            Diff Type
             <select id="mode">
               <option value="working">Working tree vs HEAD</option>
               <option value="staged">Staged changes</option>
@@ -40,7 +48,7 @@
           <button id="create-session">Create review</button>
         </section>
 
-        <section class="panel grow">
+        <section class="panel grow" id="sessions-panel">
           <div class="panel-title">Reviews</div>
           <div id="sessions" class="sessions"></div>
         </section>

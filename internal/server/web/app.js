@@ -1,13 +1,20 @@
 const state = {
+  mode: "live",
   sessions: [],
   activeSession: null,
   activeFile: null,
   flatLines: [],
   selected: { start: 0, end: 0 },
+  liveData: null,
+  pollInterval: null,
 };
 
 const els = {
   repo: document.querySelector("#repo-label"),
+  modeLive: document.querySelector("#mode-live"),
+  modeSessions: document.querySelector("#mode-sessions"),
+  comparisonPanel: document.querySelector("#comparison-panel"),
+  sessionsPanel: document.querySelector("#sessions-panel"),
   mode: document.querySelector("#mode"),
   refs: document.querySelector("#refs"),
   baseRef: document.querySelector("#base-ref"),
@@ -46,12 +53,12 @@ async function api(path, options = {}) {
 }
 
 function tokenColor(token) {
-  if (/^(func|const|var|type|return|if|else|case|switch|for|range|package|import)\b/.test(token)) return "#78a6d8";
-  if (/^["'`]/.test(token)) return "#d8b878";
-  if (/^\d+$/.test(token)) return "#b690d6";
-  if (/^(true|false|nil|null|undefined)$/.test(token)) return "#ef8f88";
-  if (/^[A-Z][A-Za-z0-9_]+$/.test(token)) return "#78c698";
-  return "#f3f0e8";
+  if (/^(func|const|var|type|return|if|else|case|switch|for|range|package|import)\b/.test(token)) return "#ff7b72";
+  if (/^["'`]/.test(token)) return "#a5d6ff";
+  if (/^\d+$/.test(token)) return "#79c0ff";
+  if (/^(true|false|nil|null|undefined)$/.test(token)) return "#79c0ff";
+  if (/^[A-Z][A-Za-z0-9_]+$/.test(token)) return "#7ee787";
+  return "#c9d1d9";
 }
 
 function resizeCanvas() {
@@ -73,7 +80,7 @@ function flatten(file) {
 function renderDiff() {
   const rect = els.canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
-  ctx.fillStyle = "#101213";
+  ctx.fillStyle = "#0d1117";
   ctx.fillRect(0, 0, rect.width, rect.height);
   ctx.font = "13px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.textBaseline = "middle";
@@ -89,16 +96,16 @@ function renderDiff() {
 
 function drawRow(line, index, y, width) {
   const selected = state.selected.start && index >= Math.min(state.selected.start, state.selected.end) && index <= Math.max(state.selected.start, state.selected.end);
-  const bg = line.kind === "add" ? "#13251b" : line.kind === "del" ? "#2a1717" : line.kind === "hunk" ? "#17212a" : selected ? "#2b2819" : "#101213";
-  ctx.fillStyle = selected ? "#3a321c" : bg;
+  const bg = line.kind === "add" ? "#1a3d2e" : line.kind === "del" ? "#3d1f20" : line.kind === "hunk" ? "#161b22" : selected ? "#362e1a" : "#0d1117";
+  ctx.fillStyle = selected ? "#4d3b1a" : bg;
   ctx.fillRect(0, y, width, rowHeight);
 
-  ctx.fillStyle = "#6f7a7a";
+  ctx.fillStyle = line.kind === "add" ? "#3fb950" : line.kind === "del" ? "#f85149" : line.kind === "hunk" ? "#58a6ff" : "#8b949e";
+  ctx.fillText(line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ", gutterWidth, y + rowHeight / 2);
+
+  ctx.fillStyle = "#6e7681";
   ctx.fillText(String(line.oldNumber || ""), 12, y + rowHeight / 2);
   ctx.fillText(String(line.newNumber || ""), 52, y + rowHeight / 2);
-
-  ctx.fillStyle = line.kind === "add" ? "#78c698" : line.kind === "del" ? "#ef8f88" : line.kind === "hunk" ? "#78a6d8" : "#9aa6a6";
-  ctx.fillText(line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ", gutterWidth, y + rowHeight / 2);
 
   drawHighlightedText(line.text || "", gutterWidth + 18, y + rowHeight / 2);
 }
@@ -133,12 +140,41 @@ function selectFile(file) {
 }
 
 function renderAll() {
-  renderSessions();
-  renderHeader();
-  renderFiles();
+  if (state.mode === "live") {
+    renderLive();
+  } else {
+    renderSessions();
+    renderHeader();
+    renderFiles();
+  }
   state.flatLines = state.activeFile ? flatten(state.activeFile) : [];
   els.activeFile.textContent = state.activeFile ? state.activeFile.path : "No file selected";
   renderDiff();
+}
+
+function renderLive() {
+  const data = state.liveData;
+  els.title.textContent = data ? "Live: Working Tree" : "Loading...";
+  els.summary.textContent = data ? data.summary : "Fetching diff...";
+  els.statFiles.textContent = `${data?.stats?.files || 0} files`;
+  els.statAdd.textContent = `+${data?.stats?.additions || 0}`;
+  els.statDel.textContent = `-${data?.stats?.deletions || 0}`;
+  els.repo.textContent = data?.meta?.repo || "local repo";
+
+  const files = data?.files || [];
+  els.files.replaceChildren(...files.map((file) => {
+    const button = document.createElement("button");
+    button.className = `file ${state.activeFile?.path === file.path ? "active" : ""}`;
+    const icon = file.status === "added" ? "A" : file.status === "deleted" ? "D" : file.status === "renamed" ? "R" : "M";
+    button.innerHTML = `<strong>${escapeHtml(file.path)}</strong><small>${icon} · +${file.additions} -${file.deletions}</small>`;
+    button.addEventListener("click", () => {
+      state.activeFile = file;
+      state.selected = { start: 0, end: 0 };
+      scrollY = 0;
+      renderAll();
+    });
+    return button;
+  }));
 }
 
 function renderSessions() {
@@ -181,6 +217,37 @@ async function refreshSessions() {
   if (!state.activeSession && state.sessions[0]) selectSession(state.sessions[0]);
   renderAll();
 }
+
+async function fetchLiveDiff() {
+  try {
+    const data = await api("/api/live");
+    state.liveData = data;
+    state.activeFile = data.files[0] || null;
+    state.selected = { start: 0, end: 0 };
+    renderAll();
+  } catch (error) {
+    els.summary.textContent = error.message;
+  }
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  els.modeLive.classList.toggle("active", mode === "live");
+  els.modeSessions.classList.toggle("active", mode === "sessions");
+  els.comparisonPanel.style.display = mode === "sessions" ? "grid" : "none";
+  els.sessionsPanel.style.display = mode === "sessions" ? "flex" : "none";
+
+  if (mode === "live") {
+    fetchLiveDiff();
+    state.pollInterval = setInterval(fetchLiveDiff, 2000);
+  } else {
+    if (state.pollInterval) clearInterval(state.pollInterval);
+    refreshSessions();
+  }
+}
+
+els.modeLive.addEventListener("click", () => setMode("live"));
+els.modeSessions.addEventListener("click", () => setMode("sessions"));
 
 els.mode.addEventListener("change", () => {
   els.refs.classList.toggle("visible", els.mode.value === "refs");
@@ -238,7 +305,5 @@ els.exportAgent.addEventListener("click", async () => {
 });
 
 window.addEventListener("resize", resizeCanvas);
-refreshSessions().then(resizeCanvas).catch((error) => {
-  els.summary.textContent = error.message;
-  resizeCanvas();
-});
+setMode("live");
+resizeCanvas();
