@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,9 +16,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/mohammed/letsreview/internal/mcp"
 	"github.com/mohammed/letsreview/internal/server"
 )
 
@@ -25,8 +28,11 @@ const defaultAddr = "127.0.0.1:55492"
 
 type config struct {
 	addr     string
+	help     bool
 	openUI   bool
+	mcp      bool
 	repoPath string
+	stop     bool
 }
 
 func main() {
@@ -41,6 +47,21 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	cfg, err := parseConfig(args)
 	if err != nil {
 		return err
+	}
+
+	if cfg.help {
+		printUsage(stdout)
+		return nil
+	}
+
+	if cfg.stop {
+		return stopServer(stdout)
+	}
+
+	if cfg.mcp {
+		srv := mcp.NewMCPServer(cfg.addr)
+		srv.Run(ctx, os.Stdin, stdout)
+		return nil
 	}
 
 	absRepo, err := filepath.Abs(cfg.repoPath)
@@ -60,7 +81,14 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 
 	app, err := server.New(absRepo)
 	if err != nil {
+		listener.Close()
 		return fmt.Errorf("start letsreview: %w", err)
+	}
+
+	pidPath := pidFilePath()
+	if err := writePIDFile(pidPath, os.Getpid(), cfg.addr); err != nil {
+		listener.Close()
+		return fmt.Errorf("write pid file: %w", err)
 	}
 
 	project := projectResponse{ID: projectID(absRepo), RepoPath: absRepo, Repo: filepath.Base(absRepo)}
@@ -69,10 +97,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		fmt.Fprintln(stdout, "open the URL above in your browser")
 	}
 
-	if err := app.Serve(listener); err != nil {
-		return fmt.Errorf("serve letsreview: %w", err)
-	}
-	return nil
+	err = app.Serve(listener)
+	os.Remove(pidPath)
+	return err
 }
 
 type projectResponse struct {
@@ -155,15 +182,198 @@ func parseConfig(args []string) (config, error) {
 	flags := flag.NewFlagSet("letsreview", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	addr := flags.String("addr", defaultAddr, "address to listen on")
+	help := flags.Bool("help", false, "show help")
 	openUI := flags.Bool("open", false, "print browser URL only; opening browsers is left to the caller")
+	mcpMode := flags.Bool("mcp", false, "run as MCP server over stdio")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return config{help: true}, nil
+		}
 		return config{}, err
 	}
 
+	stop := false
 	repoPath := "."
 	if flags.NArg() > 0 {
-		repoPath = flags.Arg(0)
+		if flags.Arg(0) == "stop" {
+			stop = true
+		} else {
+			repoPath = flags.Arg(0)
+		}
 	}
 
-	return config{addr: *addr, openUI: *openUI, repoPath: repoPath}, nil
+	return config{addr: *addr, help: *help, openUI: *openUI, mcp: *mcpMode, repoPath: repoPath, stop: stop}, nil
+}
+
+func printUsage(stdout io.Writer) {
+	fmt.Fprint(stdout, `letsreview - local Git diff review UI
+
+Usage:
+  letsreview [flags] [repo]
+  letsreview stop
+  letsreview --mcp [flags]
+
+Commands:
+  stop    stop the running letsreview server
+
+Flags:
+  -addr string
+        address to listen on (default "127.0.0.1:55492")
+  -help
+        show help
+  -mcp
+        run as MCP server over stdio
+  -open
+        print browser-open hint only; browser launch is left to caller
+
+Examples:
+  letsreview .
+  letsreview ~/Projects/email-client
+  letsreview -addr 127.0.0.1:6000 .
+  letsreview stop
+  letsreview --mcp
+`)
+}
+
+var pidFilePath = defaultPIDFilePath
+
+func defaultPIDFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "letsreview", "server.pid")
+}
+
+func writePIDFile(path string, pid int, addr string) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	content := fmt.Sprintf("%d\n%s\n", pid, addr)
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+type pidEntry struct {
+	PID  int
+	Addr string
+}
+
+func readPIDFile(path string) (pidEntry, error) {
+	if path == "" {
+		return pidEntry{}, errors.New("no pid file path")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return pidEntry{}, err
+	}
+	lines := splitLines(string(data))
+	if len(lines) < 1 {
+		return pidEntry{}, errors.New("empty pid file")
+	}
+	pid, err := strconv.Atoi(lines[0])
+	if err != nil {
+		return pidEntry{}, fmt.Errorf("parse pid: %w", err)
+	}
+	addr := defaultAddr
+	if len(lines) >= 2 && lines[1] != "" {
+		addr = lines[1]
+	}
+	return pidEntry{PID: pid, Addr: addr}, nil
+}
+
+func isProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil
+}
+
+func stopServer(stdout io.Writer) error {
+	path := pidFilePath()
+	if path == "" {
+		return errors.New("cannot determine pid file path")
+	}
+	entry, err := readPIDFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintln(stdout, "no letsreview server is running")
+			return nil
+		}
+		return fmt.Errorf("read pid file: %w", err)
+	}
+
+	if !isProcessAlive(entry.PID) {
+		os.Remove(path)
+		fmt.Fprintln(stdout, "stale pid file removed (server not running)")
+		return nil
+	}
+
+	proc, err := os.FindProcess(entry.PID)
+	if err != nil {
+		return fmt.Errorf("find process %d: %w", entry.PID, err)
+	}
+
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("send SIGTERM to %d: %w", entry.PID, err)
+	}
+
+	if err := waitExit(proc, 5*time.Second); err != nil {
+		fmt.Fprintf(stdout, "server (pid %d) did not exit cleanly, killing\n", entry.PID)
+		proc.Signal(syscall.SIGKILL)
+	}
+
+	os.Remove(path)
+	fmt.Fprintf(stdout, "server (pid %d) stopped\n", entry.PID)
+	return nil
+}
+
+func waitExit(proc *os.Process, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		_, err := proc.Wait()
+		done <- err
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(timeout):
+		return errors.New("timeout")
+	}
+}
+
+func splitLines(s string) []string {
+	var lines []string
+	for _, l := range splitBy(s, '\n') {
+		if l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+func splitBy(s string, sep byte) []string {
+	var parts []string
+	for {
+		i := indexOf(s, sep)
+		if i < 0 {
+			parts = append(parts, s)
+			return parts
+		}
+		parts = append(parts, s[:i])
+		s = s[i+1:]
+	}
+}
+
+func indexOf(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }

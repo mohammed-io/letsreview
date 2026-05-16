@@ -135,6 +135,67 @@ func TestDeleteSessionRemovesFeedbackAndSession(t *testing.T) {
 	}
 }
 
+func TestSubmitReviewStoresComments(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	session := postJSON[Session](t, app.Handler(), "/api/sessions", map[string]string{"mode": "working"})
+	postJSON[Feedback](t, app.Handler(), "/api/sessions/"+session.ID+"/feedback", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   3,
+		"body":      "Fix this.",
+	})
+	postJSON[Feedback](t, app.Handler(), "/api/sessions/"+session.ID+"/feedback", map[string]any{
+		"filePath":  "other.go",
+		"startLine": 10,
+		"endLine":   10,
+		"body":      "Also this.",
+	})
+
+	status := getJSON[map[string]string](t, app.Handler(), "/api/sessions/"+session.ID+"/review-status")
+	if status["status"] != "pending" {
+		t.Fatalf("expected pending before submit, got %q", status["status"])
+	}
+
+	submitReq := httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/submit-review", nil)
+	submitRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(submitRec, submitReq)
+	if submitRec.Code != http.StatusOK {
+		t.Fatalf("POST submit-review returned %d: %s", submitRec.Code, submitRec.Body.String())
+	}
+
+	var submitResult map[string]any
+	if err := json.NewDecoder(submitRec.Body).Decode(&submitResult); err != nil {
+		t.Fatalf("decode submit result: %v", err)
+	}
+	if submitResult["status"] != "submitted" {
+		t.Fatalf("expected submitted, got %v", submitResult["status"])
+	}
+	if submitResult["commentCount"] != float64(2) {
+		t.Fatalf("expected 2 comments, got %v", submitResult["commentCount"])
+	}
+
+	status = getJSON[map[string]string](t, app.Handler(), "/api/sessions/"+session.ID+"/review-status")
+	if status["status"] != "submitted" {
+		t.Fatalf("expected submitted after submit, got %q", status["status"])
+	}
+
+	review, ok := app.Store().GetSubmittedReview(session.ID)
+	if !ok {
+		t.Fatal("expected submitted review in store")
+	}
+	if len(review.Comments) != 2 {
+		t.Fatalf("expected 2 review comments, got %d", len(review.Comments))
+	}
+	if review.Comments[0].Body != "Fix this." {
+		t.Fatalf("expected first comment body, got %q", review.Comments[0].Body)
+	}
+}
+
 func TestProjectRegistrationUsesMD5PathIDAndReusesDuplicates(t *testing.T) {
 	repo := makeRepo(t)
 	app, err := New(repo)
@@ -327,6 +388,65 @@ func TestCreateSessionRejectsPlainDirectoryWithoutInitializingGit(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
 		t.Fatalf("expected no .git directory to be created, stat error: %v", err)
+	}
+}
+
+func TestExplainCreatesRequestAndAgentResponds(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	session := postJSON[Session](t, app.Handler(), "/api/sessions", map[string]string{"mode": "working"})
+
+	explainResult := postJSON[map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/explain", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   3,
+	})
+	if explainResult["summary"] == "" {
+		t.Fatal("expected local explanation summary")
+	}
+	reqData, ok := explainResult["request"].(map[string]any)
+	if !ok || reqData["id"] == "" {
+		t.Fatalf("expected explanation request with id, got %v", explainResult["request"])
+	}
+
+	requests := getJSON[[]map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/explanation-requests")
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 explanation request, got %d", len(requests))
+	}
+	if requests[0]["resolved"] != false {
+		t.Fatal("expected request to be unresolved")
+	}
+
+	explanations := getJSON[[]map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/explanations")
+	if len(explanations) != 0 {
+		t.Fatalf("expected 0 explanations before agent responds, got %d", len(explanations))
+	}
+
+	agentExplanation := postJSON[map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/explanations", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   3,
+		"body":      "This function returns an integer value.",
+	})
+	if agentExplanation["body"] != "This function returns an integer value." {
+		t.Fatalf("expected explanation body, got %v", agentExplanation["body"])
+	}
+
+	explanations = getJSON[[]map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/explanations")
+	if len(explanations) != 1 {
+		t.Fatalf("expected 1 explanation after agent responds, got %d", len(explanations))
+	}
+	if explanations[0]["body"] != "This function returns an integer value." {
+		t.Fatalf("expected agent explanation body, got %v", explanations[0]["body"])
+	}
+
+	requests = getJSON[[]map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/explanation-requests")
+	if requests[0]["resolved"] != true {
+		t.Fatal("expected request to be resolved after explanation submitted")
 	}
 }
 

@@ -92,6 +92,17 @@ button.danger:hover {
   background: rgba(248, 81, 73, 0.12);
 }
 
+.review-submitted {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.12);
+  color: #3fb950;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .shortcut {
   font-size: 0.75em;
   font-family: var(--font-ui);

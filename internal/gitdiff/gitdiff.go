@@ -91,14 +91,8 @@ func Summary(files []File) string {
 	return fmt.Sprintf("%d files changed with %d additions and %d deletions. Main files: %s.", len(files), additions, deletions, strings.Join(names, ", "))
 }
 
-func ExplainSelection(files []File, filePath string, startLine int, endLine int) string {
-	lines := selectedLines(files, filePath, startLine, endLine)
-	if len(lines) == 0 {
-		return "No selected diff lines were found."
-	}
-
-	added, removed, context := 0, 0, 0
-	for _, line := range lines {
+func SelectionStats(files []File, filePath string, startLine int, endLine int) (added, removed, context int) {
+	for _, line := range selectedLines(files, filePath, startLine, endLine) {
 		switch line.Kind {
 		case "add":
 			added++
@@ -108,8 +102,7 @@ func ExplainSelection(files []File, filePath string, startLine int, endLine int)
 			context++
 		}
 	}
-
-	return fmt.Sprintf("Selection includes %d added, %d removed, and %d context lines. It likely changes behavior around `%s`.", added, removed, context, compactSnippet(lines))
+	return
 }
 
 func ParseUnified(diff string) []File {
@@ -270,11 +263,13 @@ func selectedLines(files []File, filePath string, startLine int, endLine int) []
 			continue
 		}
 		selected := []Line{}
-		flatIndex := 0
 		for _, hunk := range file.Hunks {
 			for _, line := range hunk.Lines {
-				flatIndex++
-				if flatIndex >= startLine && flatIndex <= endLine {
+				lineNumber := line.NewNumber
+				if lineNumber == 0 {
+					lineNumber = line.OldNumber
+				}
+				if lineNumber >= startLine && lineNumber <= endLine {
 					selected = append(selected, line)
 				}
 			}
@@ -282,18 +277,4 @@ func selectedLines(files []File, filePath string, startLine int, endLine int) []
 		return selected
 	}
 	return nil
-}
-
-func compactSnippet(lines []Line) string {
-	parts := []string{}
-	for _, line := range lines {
-		text := strings.TrimSpace(line.Text)
-		if text != "" {
-			parts = append(parts, text)
-		}
-		if len(parts) == 3 {
-			break
-		}
-	}
-	return strings.Join(parts, " / ")
 }

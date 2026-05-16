@@ -43,23 +43,24 @@ func TestParseUnifiedReportsFilesHunksAndLineStats(t *testing.T) {
 	}
 }
 
-func TestExplainSelectionSummarizesObservableSelectedLines(t *testing.T) {
+func TestSelectionStatsCountsLineKinds(t *testing.T) {
 	files := []File{
 		{
 			Path: "main.go",
 			Hunks: []Hunk{
 				{Lines: []Line{
-					{Kind: "ctx", Text: "func keep() {}"},
-					{Kind: "del", Text: "return false"},
-					{Kind: "add", Text: "return true"},
+					{Kind: "ctx", NewNumber: 21, OldNumber: 21, Text: "func keep() {}"},
+					{Kind: "del", OldNumber: 22, Text: "return false"},
+					{Kind: "add", NewNumber: 22, Text: "return true"},
+					{Kind: "add", NewNumber: 23, Text: "return ready"},
 				}},
 			},
 		},
 	}
 
-	summary := ExplainSelection(files, "main.go", 2, 3)
-	if !strings.Contains(summary, "1 added") || !strings.Contains(summary, "1 removed") {
-		t.Fatalf("expected selected line counts in summary, got %q", summary)
+	added, removed, context := SelectionStats(files, "main.go", 22, 23)
+	if added != 2 || removed != 1 || context != 0 {
+		t.Fatalf("expected 2 added, 1 removed, 0 context; got +%d -%d ctx%d", added, removed, context)
 	}
 }
 

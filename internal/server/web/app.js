@@ -12,6 +12,9 @@ const state = {
   inlineReviewOpen: false,
   pendingReviewOpen: false,
   viewedFiles: new Set(),
+  reviewSubmitted: false,
+  explanations: [],
+  explanationPollInterval: null,
 };
 
 const els = {
@@ -46,7 +49,8 @@ const els = {
   commentsModal: document.querySelector("#comments-modal"),
   closeCommentsModal: document.querySelector("#close-comments-modal"),
   fileCommentList: document.querySelector("#file-comment-list"),
-  exportAgent: document.querySelector("#export-agent"),
+  submitReview: document.querySelector("#submit-review"),
+  reviewStatus: document.querySelector("#review-status"),
   clearSession: document.querySelector("#clear-session"),
   agentPayloadModal: document.querySelector("#agent-payload-modal"),
   closeAgentPayload: document.querySelector("#close-agent-payload"),
@@ -104,8 +108,9 @@ function writeStoredState(values = {}) {
 }
 
 function draftKey() {
-  const start = Math.min(state.selected.start || 0, state.selected.end || 0);
-  const end = Math.max(state.selected.start || 0, state.selected.end || 0);
+  const range = selectedLineRange() || { start: 0, end: 0 };
+  const start = Math.min(range.start, range.end);
+  const end = Math.max(range.start, range.end);
   return storageKey(`draft:${state.activeFile?.path || "none"}:${start}:${end}`);
 }
 
@@ -176,6 +181,7 @@ function renderDiff() {
     const y = (index - 1) * rowHeight - scrollY;
     drawRow(line, index, y, rect.width);
     drawCommentMarker(index, y, rect.width);
+    drawExplanationBlock(index, y, rect.width);
   });
 
   ctx.fillStyle = canvasTheme.border;
@@ -193,6 +199,10 @@ function commentsForActiveFile() {
   return (state.activeSession?.feedback || []).filter((comment) => comment.filePath === state.activeFile?.path);
 }
 
+function explanationsForActiveFile() {
+  return (state.explanations || []).filter((e) => e.filePath === state.activeFile?.path);
+}
+
 function commentsForRange(start, end) {
   const low = Math.min(start, end);
   const high = Math.max(start, end);
@@ -203,20 +213,59 @@ function commentsForRange(start, end) {
   });
 }
 
+function lineNumberForRow(row) {
+  const line = state.flatLines[row - 1];
+  if (!line || line.kind === "hunk") return 0;
+  return line.newNumber || line.oldNumber || 0;
+}
+
+function selectedRows() {
+  if (!state.selected.start || !state.selected.end) return [];
+  const start = Math.min(state.selected.start, state.selected.end);
+  const end = Math.max(state.selected.start, state.selected.end);
+  return state.flatLines.slice(start - 1, end).map((_, offset) => start + offset);
+}
+
+function selectedLineRange() {
+  const numbers = selectedRows().map(lineNumberForRow).filter(Boolean);
+  if (numbers.length === 0) return null;
+  return { start: Math.min(...numbers), end: Math.max(...numbers) };
+}
+
+function rowsForLineRange(startLine, endLine) {
+  const low = Math.min(startLine, endLine);
+  const high = Math.max(startLine, endLine);
+  const rows = state.flatLines
+    .map((_, index) => ({ row: index + 1, lineNumber: lineNumberForRow(index + 1) }))
+    .filter((item) => item.lineNumber >= low && item.lineNumber <= high);
+  if (rows.length === 0) return null;
+  return { start: rows[0].row, end: rows[rows.length - 1].row };
+}
+
+function rangeLabel(range, prefix = "Line") {
+  if (!range) return `${prefix} ?`;
+  const start = Math.min(range.start, range.end);
+  const end = Math.max(range.start, range.end);
+  return start === end ? `${prefix} ${start}` : `${prefix}s ${start}-${end}`;
+}
+
 function markerGroups() {
   return Object.values(commentsForActiveFile().reduce((groups, comment) => {
     const start = Math.min(comment.startLine, comment.endLine);
     const end = Math.max(comment.startLine, comment.endLine);
     const key = `${start}:${end}`;
+    const rows = rowsForLineRange(start, end);
     return {
       ...groups,
       [key]: {
         start,
         end,
+        rowStart: rows?.start || 0,
+        rowEnd: rows?.end || 0,
         count: (groups[key]?.count || 0) + 1,
       },
     };
-  }, {}));
+  }, {})).filter((group) => group.rowStart);
 }
 
 function commentCountForFile(path) {
@@ -245,7 +294,7 @@ function setActiveFile(file) {
 }
 
 function drawCommentMarker(row, y, width) {
-  const group = markerGroups().find((item) => item.start === row);
+  const group = markerGroups().find((item) => item.rowStart === row);
   if (!group) return;
 
   const label = String(group.count);
@@ -261,6 +310,72 @@ function drawCommentMarker(row, y, width) {
   ctx.fillText(label, x + markerWidth / 2, y + rowHeight / 2);
   ctx.textAlign = "left";
   commentMarkers.push({ ...group, x, y: markerY, width: markerWidth, height: markerHeight });
+}
+
+function drawExplanationBlock(row, y, width) {
+  const explanation = explanationsForActiveFile().find((e) => rowsForLineRange(e.startLine, e.endLine)?.end === row);
+  if (!explanation) return;
+
+  const label = "E";
+  const markerWidth = 20;
+  const markerHeight = 16;
+  const commentGroup = markerGroups().find((item) => item.rowStart === row);
+  const markerOffset = commentGroup ? 26 : 0;
+  const mx = width - markerWidth - 12 - markerOffset;
+  const markerY = y + Math.floor((rowHeight - markerHeight) / 2);
+  ctx.fillStyle = "#8b5cf6";
+  roundRect(mx, markerY, markerWidth, markerHeight, 8);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.fillText(label, mx + markerWidth / 2, y + rowHeight / 2);
+  ctx.textAlign = "left";
+  const expRows = rowsForLineRange(explanation.startLine, explanation.endLine);
+  commentMarkers.push({ start: explanation.startLine, end: explanation.endLine, rowStart: expRows?.start || row, rowEnd: expRows?.end || row, x: mx, y: markerY, width: markerWidth, height: markerHeight, explanation: true });
+
+  const blockY = y + rowHeight;
+  const pad = 8;
+  const lh = 18;
+  const maxW = width - gutterWidth - codePadding * 2 - pad * 2;
+  const bodyLines = wrapText(explanation.body, maxW);
+  const blockH = bodyLines.length * lh + pad * 2 + lh;
+
+  ctx.fillStyle = "#1a1033";
+  roundRect(gutterWidth, blockY, width - gutterWidth, blockH, 4);
+  ctx.fill();
+  ctx.strokeStyle = "#8b5cf644";
+  ctx.lineWidth = 1;
+  roundRect(gutterWidth, blockY, width - gutterWidth, blockH, 4);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  ctx.textAlign = "left";
+  let ty = blockY + pad + lh / 2;
+  ctx.fillStyle = "#8b5cf6";
+  ctx.fillText("AI Explainer:", gutterWidth + pad, ty);
+  ty += lh;
+  ctx.fillStyle = "#c9d1d9";
+  for (const ln of bodyLines) {
+    ctx.fillText(ln, gutterWidth + pad, ty);
+    ty += lh;
+  }
+}
+
+function wrapText(text, maxWidth) {
+  const words = text.split(/\s+/);
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    const test = current ? `${current} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [text];
 }
 
 function roundRect(x, y, width, height, radius) {
@@ -343,34 +458,54 @@ function renderAll() {
   els.activeFile.textContent = state.activeFile ? state.activeFile.path : "No file selected";
   els.viewedFile.checked = Boolean(state.activeFile && isFileViewed(state.activeFile));
   els.viewedFile.disabled = !state.activeFile;
-  const hasSelection = Boolean(state.selected.start && state.selected.end);
+  const hasSelection = Boolean(selectedLineRange());
   const sessionReady = Boolean(state.activeSession && state.activeFile);
-  els.explain.disabled = !sessionReady || !hasSelection;
-  els.saveFeedback.disabled = !sessionReady || !hasSelection;
+  els.explain.disabled = !sessionReady || !hasSelection || state.reviewSubmitted;
+  els.saveFeedback.disabled = !sessionReady || !hasSelection || state.reviewSubmitted;
   els.showFileComments.disabled = !state.activeFile || commentsForActiveFile().length === 0;
-  els.exportAgent.disabled = totalCommentCount() === 0;
-  els.clearSession.disabled = !state.activeSession && !sessionStorage.getItem(storageKey("state"));
+  els.submitReview.disabled = state.reviewSubmitted || totalCommentCount() === 0;
+  els.clearSession.disabled = state.reviewSubmitted || (!state.activeSession && !sessionStorage.getItem(storageKey("state")));
+  if (state.reviewSubmitted) els.inlineReview.classList.remove("visible");
+  els.reviewStatus.style.display = state.reviewSubmitted ? "" : "none";
   renderInlineReview();
   renderDiff();
 }
 
 function renderInlineReview() {
-  const hasSelection = Boolean(state.selected.start && state.selected.end);
+  const selectedRange = selectedLineRange();
+  const hasSelection = Boolean(selectedRange);
   const canComment = Boolean(state.inlineReviewOpen && state.activeSession && state.activeFile && hasSelection);
   els.inlineReview.classList.toggle("visible", canComment);
   if (!canComment) return;
 
+  const end = Math.max(state.selected.start, state.selected.end);
+  const stage = els.canvas.getBoundingClientRect();
+  const panelHeight = els.inlineReview.offsetHeight || 220;
+  const anchorY = end * rowHeight - scrollY + 6;
+  const maxTop = Math.max(8, stage.height - panelHeight - 12);
+  const top = Math.max(8, Math.min(anchorY, maxTop));
+  els.inlineReview.style.top = `${top}px`;
+  els.inlineReviewTitle.textContent = `Comment on ${rangeLabel(selectedRange, "line")}`;
+  renderCommentList(selectedRange.start, selectedRange.end);
+  els.feedback.value = sessionStorage.getItem(draftKey()) || "";
+}
+
+function clampInlineReview() {
+  if (!state.inlineReviewOpen || !state.selected.start) return;
   const start = Math.min(state.selected.start, state.selected.end);
   const end = Math.max(state.selected.start, state.selected.end);
   const stage = els.canvas.getBoundingClientRect();
   const panelHeight = els.inlineReview.offsetHeight || 220;
-  const wantedTop = end * rowHeight - scrollY + 6;
-  const maxTop = Math.max(8, stage.height - panelHeight - 12);
-  const top = Math.max(8, Math.min(wantedTop, maxTop));
-  els.inlineReview.style.top = `${top}px`;
-  els.inlineReviewTitle.textContent = start === end ? `Comment on line ${start}` : `Comment on lines ${start}-${end}`;
-  renderCommentList(start, end);
-  els.feedback.value = sessionStorage.getItem(draftKey()) || "";
+  const selTop = (start - 1) * rowHeight - scrollY;
+  const selBottom = end * rowHeight - scrollY;
+  if (selBottom < 0 || selTop > stage.height) {
+    els.inlineReview.classList.remove("visible");
+    return;
+  }
+  const anchorY = selBottom + 6;
+  const clampedTop = Math.max(8, Math.min(anchorY, stage.height - panelHeight - 12));
+  els.inlineReview.style.top = `${clampedTop}px`;
+  els.inlineReview.classList.add("visible");
 }
 
 function renderCommentList(start, end) {
@@ -382,7 +517,7 @@ function commentNodes(comments) {
   return comments.map((comment) => {
     const item = document.createElement("article");
     item.className = "comment-item";
-    const range = comment.startLine === comment.endLine ? `Line ${comment.startLine}` : `Lines ${comment.startLine}-${comment.endLine}`;
+    const range = rangeLabel({ start: comment.startLine, end: comment.endLine });
     const created = new Date(comment.createdAt).toLocaleString();
     item.innerHTML = `
       <div class="comment-meta">
@@ -399,10 +534,11 @@ function commentNodes(comments) {
 }
 
 async function saveFeedback() {
-  if (!state.activeSession || !state.activeFile || !els.feedback.value.trim()) return;
+  const range = selectedLineRange();
+  if (!state.activeSession || !state.activeFile || !range || !els.feedback.value.trim() || state.reviewSubmitted) return;
   await api(`/api/sessions/${state.activeSession.id}/feedback`, {
     method: "POST",
-    body: JSON.stringify({ filePath: state.activeFile.path, startLine: state.selected.start, endLine: state.selected.end, body: els.feedback.value }),
+    body: JSON.stringify({ filePath: state.activeFile.path, startLine: range.start, endLine: range.end, body: els.feedback.value }),
   });
   sessionStorage.removeItem(draftKey());
   els.feedback.value = "";
@@ -449,7 +585,7 @@ async function ensureReviewSession() {
 }
 
 async function openInlineReviewForSelection() {
-  if (!state.activeFile || !state.selected.start) return;
+  if (!state.activeFile || !selectedLineRange() || state.reviewSubmitted) return;
   const selectedPath = state.activeFile.path;
   const session = await ensureReviewSession();
   state.activeFile = session.files.find((file) => file.path === selectedPath) || state.activeFile;
@@ -524,7 +660,30 @@ async function refreshSessions() {
     selectSession(state.sessions.find((session) => session.id === storedSessionID) || state.sessions[0]);
     return;
   }
+  await fetchExplanations();
   renderAll();
+}
+
+async function fetchExplanations() {
+  if (!state.activeSession) return;
+  try {
+    state.explanations = await api(`/api/sessions/${state.activeSession.id}/explanations`);
+  } catch {
+    state.explanations = [];
+  }
+}
+
+function startExplanationPoll() {
+  if (state.explanationPollInterval) return;
+  const count = state.explanations.length;
+  state.explanationPollInterval = setInterval(async () => {
+    await fetchExplanations();
+    renderAll();
+    if (state.explanations.length > count) {
+      clearInterval(state.explanationPollInterval);
+      state.explanationPollInterval = null;
+    }
+  }, 3000);
 }
 
 async function fetchLiveDiff() {
@@ -599,7 +758,7 @@ els.canvas.addEventListener("wheel", (event) => {
   if (state.activeFile) {
     writeStoredState({ scrollByFile: { ...(readStoredState().scrollByFile || {}), [state.activeFile.path]: scrollY } });
   }
-  renderInlineReview();
+  clampInlineReview();
   renderDiff();
 }, { passive: false });
 
@@ -614,9 +773,17 @@ els.canvas.addEventListener("mousedown", (event) => {
     && event.clientY - rect.top <= item.y + item.height
   ));
   if (marker) {
-    state.selected = { start: marker.start, end: marker.end };
+    if (marker.explanation) {
+      const exp = explanationsForActiveFile().find((e) => e.startLine === marker.start);
+      if (exp) {
+        els.explanation.textContent = exp.body;
+        state.selected = { start: marker.rowStart, end: marker.rowEnd };
+      }
+    } else {
+      state.selected = { start: marker.rowStart, end: marker.rowEnd };
+      els.inlineReview.classList.remove("visible");
+    }
     renderAll();
-    els.inlineReview.classList.remove("visible");
     return;
   }
 
@@ -639,23 +806,26 @@ els.canvas.addEventListener("mouseup", () => {
 });
 
 els.explain.addEventListener("click", async () => {
-  if (!state.activeSession || !state.activeFile) return;
+  const range = selectedLineRange();
+  if (!state.activeSession || !state.activeFile || !range) return;
   const result = await api(`/api/sessions/${state.activeSession.id}/explain`, {
     method: "POST",
-    body: JSON.stringify({ filePath: state.activeFile.path, startLine: state.selected.start, endLine: state.selected.end }),
+    body: JSON.stringify({ filePath: state.activeFile.path, startLine: range.start, endLine: range.end }),
   });
-  els.explanation.textContent = result.summary;
+  els.explanation.textContent = result.summary || "Explanation requested — waiting for agent response.";
+  startExplanationPoll();
 });
 
 els.saveFeedback.addEventListener("click", async () => {
   await saveFeedback();
 });
 
-els.exportAgent.addEventListener("click", async () => {
+els.submitReview.addEventListener("click", async () => {
   if (!state.activeSession) return;
-  const payload = await api(`/api/sessions/${state.activeSession.id}/agent-payload`);
-  els.payload.textContent = JSON.stringify(payload, null, 2);
-  els.agentPayloadModal.classList.add("visible");
+  if (!window.confirm("Submit this review? The agent will receive all comments and may start making changes.")) return;
+  await api(`/api/sessions/${state.activeSession.id}/submit-review`, { method: "POST" });
+  state.reviewSubmitted = true;
+  renderAll();
 });
 
 els.closeAgentPayload.addEventListener("click", () => {
@@ -688,7 +858,7 @@ els.fileCommentList.addEventListener("click", async (event) => {
 });
 
 els.feedback.addEventListener("input", () => {
-  if (!state.activeFile || !state.selected.start) return;
+  if (!state.activeFile || !selectedLineRange()) return;
   sessionStorage.setItem(draftKey(), els.feedback.value);
 });
 
@@ -708,3 +878,22 @@ els.closeFeedback.addEventListener("click", () => {
 window.addEventListener("resize", resizeCanvas);
 setMode("live");
 resizeCanvas();
+
+{
+  const sessionID = new URLSearchParams(window.location.search).get("session");
+  if (sessionID) {
+    const check = async () => {
+      await refreshSessions();
+      const found = state.sessions.find((s) => s.id === sessionID);
+      if (found) {
+        selectSession(found);
+        const status = await api(`/api/sessions/${sessionID}/review-status`);
+        if (status.status === "submitted") {
+          state.reviewSubmitted = true;
+          renderAll();
+        }
+      }
+    };
+    check();
+  }
+}
