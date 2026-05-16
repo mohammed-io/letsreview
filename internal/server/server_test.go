@@ -15,6 +15,27 @@ import (
 	"testing"
 )
 
+func TestWebUIIncludesReviewCockpit(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / returned %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Review cockpit", "Feedback", "Keyboard shortcuts", "panel-add-comment", "review-comment-list"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected web UI to include %q", want)
+		}
+	}
+}
+
 func TestSessionFeedbackAndAgentPayload(t *testing.T) {
 	repo := makeRepo(t)
 	app, err := New(repo)
@@ -323,14 +344,14 @@ func TestStaticUIKeepsCanvasDiffRenderer(t *testing.T) {
 	if strings.Contains(html, `class="assistant"`) {
 		t.Fatalf("expected feedback to be inline, not in a side assistant panel")
 	}
-	if strings.Contains(html, "<aside") {
-		t.Fatalf("expected no sidebar aside in static UI")
+	if !strings.Contains(html, `class="review-panel"`) {
+		t.Fatalf("expected review cockpit panel in static UI")
 	}
 	if !strings.Contains(html, `id="viewed-file"`) {
 		t.Fatalf("expected viewed checkbox in static UI")
 	}
-	if !strings.Contains(html, `id="show-file-comments"`) {
-		t.Fatalf("expected file comments button in static UI")
+	if strings.Contains(html, `id="show-file-comments"`) {
+		t.Fatalf("expected file comments button to be removed from diff toolbar")
 	}
 	if !strings.Contains(html, `id="agent-payload-modal"`) {
 		t.Fatalf("expected agent payload modal in static UI")

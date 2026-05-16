@@ -303,7 +303,37 @@ func (s *Server) Store() *Store {
 }
 
 func (s *Server) Serve(listener net.Listener) error {
-	return http.Serve(listener, s.mux)
+	srv := &http.Server{Handler: s.mux}
+	errCh := make(chan error, 1)
+	go func() {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+	<-errCh
+	return nil
+}
+
+func (s *Server) ServeWithShutdown(ctx context.Context, listener net.Listener) error {
+	srv := &http.Server{Handler: s.mux}
+	errCh := make(chan error, 1)
+	go func() {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(shutdownCtx)
+		return <-errCh
+	}
 }
 
 func (s *Server) Handler() http.Handler {

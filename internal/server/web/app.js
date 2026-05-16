@@ -13,8 +13,11 @@ const state = {
   pendingReviewOpen: false,
   viewedFiles: new Set(),
   reviewSubmitted: false,
+  focusedCommentIndex: -1,
   explanations: [],
   explanationPollInterval: null,
+  motionCount: "",
+  focusZone: "diff",
 };
 
 const els = {
@@ -36,6 +39,7 @@ const els = {
   statDel: document.querySelector("#stat-del"),
   files: document.querySelector("#files"),
   activeFile: document.querySelector("#active-file"),
+  diffArea: document.querySelector(".diff-area"),
   canvas: document.querySelector("#diff-canvas"),
   explain: document.querySelector("#explain-selection"),
   explanation: document.querySelector("#explanation"),
@@ -45,22 +49,32 @@ const els = {
   inlineReviewTitle: document.querySelector("#inline-review-title"),
   commentList: document.querySelector("#comment-list"),
   saveFeedback: document.querySelector("#save-feedback"),
-  showFileComments: document.querySelector("#show-file-comments"),
   commentsModal: document.querySelector("#comments-modal"),
   closeCommentsModal: document.querySelector("#close-comments-modal"),
   fileCommentList: document.querySelector("#file-comment-list"),
-  submitReview: document.querySelector("#submit-review"),
   reviewStatus: document.querySelector("#review-status"),
   clearSession: document.querySelector("#clear-session"),
   agentPayloadModal: document.querySelector("#agent-payload-modal"),
   closeAgentPayload: document.querySelector("#close-agent-payload"),
   payload: document.querySelector("#agent-payload"),
   viewedFile: document.querySelector("#viewed-file"),
+  metricComments: document.querySelector("#metric-comments"),
+  metricDrafts: document.querySelector("#metric-drafts"),
+  metricViewed: document.querySelector("#metric-viewed"),
+  panelAddComment: document.querySelector("#panel-add-comment"),
+  panelSubmitReview: document.querySelector("#panel-submit-review"),
+  reviewCommentList: document.querySelector("#review-comment-list"),
+  reviewSection: document.querySelector(".review-section.grow"),
+  showShortcuts: document.querySelector("#show-shortcuts"),
+  shortcutsModal: document.querySelector("#shortcuts-modal"),
+  closeShortcuts: document.querySelector("#close-shortcuts"),
 };
 
 {
   const shortcut = els.saveFeedback.querySelector(".shortcut");
-  if (shortcut) shortcut.textContent = (navigator.platform.includes("Mac") ? "⌘" : "Ctrl") + " + Enter";
+  const mod = (navigator.platform.includes("Mac") ? "⌘" : "Ctrl") + " + Enter";
+  if (shortcut) shortcut.textContent = mod;
+  document.querySelectorAll(".mod-enter").forEach((node) => { node.textContent = mod; });
 }
 
 const ctx = els.canvas.getContext("2d");
@@ -79,8 +93,8 @@ const canvasTheme = {
   delBg: "#67060c",
   delGutter: "#78191b",
   delText: "#ffdcd7",
-  selected: "#1f6feb33",
-  selectedBorder: "#1f6feb",
+  selected: "#f2cc6033",
+  selectedBorder: "#f2cc60",
   string: "#a5d6ff",
   keyword: "#ff7b72",
   number: "#79c0ff",
@@ -276,6 +290,19 @@ function totalCommentCount() {
   return state.activeSession?.feedback?.length || 0;
 }
 
+function allFiles() {
+  return state.mode === "live" ? (state.liveData?.files || []) : (state.activeSession?.files || []);
+}
+
+function draftCount() {
+  const prefix = storageKey("draft:");
+  return Object.keys(sessionStorage).filter((key) => key.startsWith(prefix) && sessionStorage.getItem(key)?.trim()).length;
+}
+
+function viewedCount(files = allFiles()) {
+  return files.filter((file) => isFileViewed(file)).length;
+}
+
 function fileViewedKey(file) {
   return `${state.activeSession?.id || "live"}:${file?.path || ""}`;
 }
@@ -298,17 +325,23 @@ function drawCommentMarker(row, y, width) {
   if (!group) return;
 
   const label = String(group.count);
-  const markerWidth = Math.max(22, ctx.measureText(label).width + 14);
-  const markerHeight = 16;
-  const x = width - markerWidth - 12;
+  ctx.save();
+  ctx.font = "700 12px ui-monospace, SFMono-Regular, Menlo, monospace";
+  const markerWidth = Math.max(30, ctx.measureText(label).width + 18);
+  const markerHeight = 20;
+  const x = 8;
   const markerY = y + Math.floor((rowHeight - markerHeight) / 2);
   ctx.fillStyle = "#1f6feb";
-  roundRect(x, markerY, markerWidth, markerHeight, 8);
+  roundRect(x, markerY, markerWidth, markerHeight, 10);
   ctx.fill();
+  ctx.strokeStyle = "#79c0ff";
+  ctx.lineWidth = 1;
+  roundRect(x + 0.5, markerY + 0.5, markerWidth - 1, markerHeight - 1, 10);
+  ctx.stroke();
   ctx.fillStyle = "#ffffff";
   ctx.textAlign = "center";
   ctx.fillText(label, x + markerWidth / 2, y + rowHeight / 2);
-  ctx.textAlign = "left";
+  ctx.restore();
   commentMarkers.push({ ...group, x, y: markerY, width: markerWidth, height: markerHeight });
 }
 
@@ -446,6 +479,23 @@ function selectFile(file) {
   setActiveFile(file);
 }
 
+function renderFocusZone() {
+  els.diffArea.classList.toggle("keyboard-focus", state.focusZone === "diff");
+  els.reviewSection.classList.toggle("keyboard-focus", state.focusZone === "queue");
+}
+
+function setFocusZone(zone, options = {}) {
+  state.focusZone = zone;
+  renderFocusZone();
+  if (options.focus) {
+    (zone === "queue" ? els.reviewSection : els.diffArea).focus({ preventScroll: true });
+  }
+}
+
+function toggleFocusZone() {
+  setFocusZone(state.focusZone === "diff" ? "queue" : "diff", { focus: true });
+}
+
 function renderAll() {
   if (state.mode === "live") {
     renderLive();
@@ -459,32 +509,47 @@ function renderAll() {
   els.viewedFile.checked = Boolean(state.activeFile && isFileViewed(state.activeFile));
   els.viewedFile.disabled = !state.activeFile;
   const hasSelection = Boolean(selectedLineRange());
-  const sessionReady = Boolean(state.activeSession && state.activeFile);
-  els.explain.disabled = !sessionReady || !hasSelection || state.reviewSubmitted;
-  els.saveFeedback.disabled = !sessionReady || !hasSelection || state.reviewSubmitted;
-  els.showFileComments.disabled = !state.activeFile || commentsForActiveFile().length === 0;
-  els.submitReview.disabled = state.reviewSubmitted || totalCommentCount() === 0;
+  const canReviewSelection = Boolean(state.activeFile && hasSelection);
+  els.explain.disabled = !canReviewSelection || state.reviewSubmitted;
+  els.saveFeedback.disabled = !canReviewSelection || state.reviewSubmitted;
   els.clearSession.disabled = state.reviewSubmitted || (!state.activeSession && !sessionStorage.getItem(storageKey("state")));
   if (state.reviewSubmitted) els.inlineReview.classList.remove("visible");
   els.reviewStatus.style.display = state.reviewSubmitted ? "" : "none";
   renderInlineReview();
+  renderReviewPanel();
+  renderFocusZone();
   renderDiff();
+}
+
+function ensureInlineReviewVisible() {
+  if (!state.inlineReviewOpen || !state.selected.start) return;
+  const end = Math.max(state.selected.start, state.selected.end);
+  const stage = els.canvas.getBoundingClientRect();
+  const panelHeight = els.inlineReview.offsetHeight || 240;
+  const anchorY = end * rowHeight - scrollY + 6;
+  const revealBuffer = Math.max(72, rowHeight * 4);
+  const overflow = anchorY + panelHeight + revealBuffer - stage.height;
+  if (overflow > 0) scrollDiffBy(overflow);
 }
 
 function renderInlineReview() {
   const selectedRange = selectedLineRange();
   const hasSelection = Boolean(selectedRange);
-  const canComment = Boolean(state.inlineReviewOpen && state.activeSession && state.activeFile && hasSelection);
+  const canComment = Boolean(state.inlineReviewOpen && state.activeFile && hasSelection);
   els.inlineReview.classList.toggle("visible", canComment);
   if (!canComment) return;
 
+  const start = Math.min(state.selected.start, state.selected.end);
   const end = Math.max(state.selected.start, state.selected.end);
   const stage = els.canvas.getBoundingClientRect();
-  const panelHeight = els.inlineReview.offsetHeight || 220;
-  const anchorY = end * rowHeight - scrollY + 6;
-  const maxTop = Math.max(8, stage.height - panelHeight - 12);
-  const top = Math.max(8, Math.min(anchorY, maxTop));
-  els.inlineReview.style.top = `${top}px`;
+  const selTop = (start - 1) * rowHeight - scrollY;
+  const selBottom = end * rowHeight - scrollY;
+  const anchorY = selBottom + 6;
+  if (selBottom < 0 || selTop > stage.height) {
+    els.inlineReview.classList.remove("visible");
+    return;
+  }
+  els.inlineReview.style.top = `${anchorY}px`;
   els.inlineReviewTitle.textContent = `Comment on ${rangeLabel(selectedRange, "line")}`;
   renderCommentList(selectedRange.start, selectedRange.end);
   els.feedback.value = sessionStorage.getItem(draftKey()) || "";
@@ -495,17 +560,23 @@ function clampInlineReview() {
   const start = Math.min(state.selected.start, state.selected.end);
   const end = Math.max(state.selected.start, state.selected.end);
   const stage = els.canvas.getBoundingClientRect();
-  const panelHeight = els.inlineReview.offsetHeight || 220;
   const selTop = (start - 1) * rowHeight - scrollY;
   const selBottom = end * rowHeight - scrollY;
+  const anchorY = selBottom + 6;
   if (selBottom < 0 || selTop > stage.height) {
     els.inlineReview.classList.remove("visible");
     return;
   }
-  const anchorY = selBottom + 6;
-  const clampedTop = Math.max(8, Math.min(anchorY, stage.height - panelHeight - 12));
-  els.inlineReview.style.top = `${clampedTop}px`;
+  els.inlineReview.style.top = `${anchorY}px`;
   els.inlineReview.classList.add("visible");
+}
+
+function morphReviewComments(nodes) {
+  if (window.Idiomorph?.morph) {
+    window.Idiomorph.morph(els.reviewCommentList, nodes.map((node) => node.outerHTML).join(""), { morphStyle: "innerHTML" });
+    return;
+  }
+  els.reviewCommentList.replaceChildren(...nodes);
 }
 
 function renderCommentList(start, end) {
@@ -513,13 +584,14 @@ function renderCommentList(start, end) {
   els.commentList.replaceChildren(...commentNodes(comments));
 }
 
-function commentNodes(comments) {
-  return comments.map((comment) => {
+function commentNodes(comments, options = {}) {
+  return comments.map((comment, index) => {
     const item = document.createElement("article");
-    item.className = "comment-item";
+    item.className = `comment-item ${index === state.focusedCommentIndex ? "focused" : ""}`;
+    item.dataset.feedbackId = comment.id;
     const range = rangeLabel({ start: comment.startLine, end: comment.endLine });
     const created = new Date(comment.createdAt).toLocaleString();
-    item.innerHTML = `
+    item.innerHTML = options.legacy ? `
       <div class="comment-meta">
         <div>
           <strong>${escapeHtml(range)}</strong>
@@ -528,23 +600,74 @@ function commentNodes(comments) {
         <button class="secondary delete-comment" data-feedback-id="${escapeHtml(comment.id)}">Delete</button>
       </div>
       <p>${escapeHtml(comment.body)}</p>
+    ` : `
+      <div class="comment-meta">
+        <strong>${escapeHtml(range)}</strong>
+        <button class="delete-comment icon-delete" data-feedback-id="${escapeHtml(comment.id)}" aria-label="Delete comment">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+          </svg>
+        </button>
+      </div>
+      <p>${escapeHtml(comment.body)}</p>
     `;
     return item;
   });
 }
 
+function renderReviewPanel() {
+  const files = allFiles();
+  const comments = state.activeSession?.feedback || [];
+  const selectedRange = selectedLineRange();
+  els.metricComments.textContent = String(comments.length);
+  els.metricDrafts.textContent = String(draftCount());
+  els.metricViewed.textContent = `${viewedCount(files)}/${files.length}`;
+  els.panelAddComment.disabled = !state.activeFile || !selectedRange || state.reviewSubmitted;
+  els.panelSubmitReview.disabled = state.reviewSubmitted || comments.length === 0;
+  morphReviewComments(commentNodes(comments));
+}
+
+function focusComment(comment, options = {}) {
+  const file = allFiles().find((item) => item.path === comment.filePath);
+  if (!file) return;
+  setActiveFile(file);
+  const rows = rowsForLineRange(comment.startLine, comment.endLine);
+  if (rows) {
+    state.selected = { start: rows.start, end: rows.end };
+    scrollY = Math.max(0, (rows.start - 4) * rowHeight);
+    state.inlineReviewOpen = true;
+  }
+  renderAll();
+  if (options.focusInput) els.feedback.focus();
+}
+
+
 async function saveFeedback() {
   const range = selectedLineRange();
-  if (!state.activeSession || !state.activeFile || !range || !els.feedback.value.trim() || state.reviewSubmitted) return;
-  await api(`/api/sessions/${state.activeSession.id}/feedback`, {
+  if (!state.activeFile || !range || !els.feedback.value.trim() || state.reviewSubmitted) return;
+  const filePath = state.activeFile.path;
+  const session = await ensureReviewSession();
+  await api(`/api/sessions/${session.id}/feedback`, {
     method: "POST",
-    body: JSON.stringify({ filePath: state.activeFile.path, startLine: range.start, endLine: range.end, body: els.feedback.value }),
+    body: JSON.stringify({ filePath, startLine: range.start, endLine: range.end, body: els.feedback.value }),
   });
+  const selected = { ...state.selected };
+  const savedScrollY = scrollY;
   sessionStorage.removeItem(draftKey());
   els.feedback.value = "";
-  state.selected = { start: 0, end: 0 };
   state.inlineReviewOpen = false;
   await refreshSessions();
+  state.selected = selected;
+  scrollY = savedScrollY;
+  renderAll();
+}
+
+async function submitReview() {
+  if (!state.activeSession || state.reviewSubmitted || totalCommentCount() === 0) return;
+  if (!window.confirm("Submit this review? The agent will receive all comments and may start making changes.")) return;
+  await api(`/api/sessions/${state.activeSession.id}/submit-review`, { method: "POST" });
+  state.reviewSubmitted = true;
+  renderAll();
 }
 
 async function deleteComment(feedbackID) {
@@ -584,20 +707,20 @@ async function ensureReviewSession() {
   return session;
 }
 
-async function openInlineReviewForSelection() {
+function openInlineReviewForSelection(options = {}) {
   if (!state.activeFile || !selectedLineRange() || state.reviewSubmitted) return;
-  const selectedPath = state.activeFile.path;
-  const session = await ensureReviewSession();
-  state.activeFile = session.files.find((file) => file.path === selectedPath) || state.activeFile;
   state.inlineReviewOpen = true;
   renderAll();
-  els.feedback.focus();
+  ensureInlineReviewVisible();
+  renderInlineReview();
+  renderDiff();
+  if (options.focusInput) els.feedback.focus();
 }
 
 function renderLive() {
   const data = state.liveData;
   els.title.textContent = data ? "Live: Working Tree" : "Loading...";
-  els.summary.textContent = data ? data.summary : "Fetching diff...";
+  if (els.summary) els.summary.textContent = data ? data.summary : "Fetching diff...";
   els.statFiles.textContent = `${data?.stats?.files || 0} files`;
   els.statAdd.textContent = `+${data?.stats?.additions || 0}`;
   els.statDel.textContent = `-${data?.stats?.deletions || 0}`;
@@ -628,7 +751,7 @@ function renderSessions() {
 function renderHeader() {
   const session = state.activeSession;
   els.title.textContent = session ? session.title : "No review loaded";
-  els.summary.textContent = session ? session.summary : "Create a review to inspect diffs.";
+  if (els.summary) els.summary.textContent = session ? session.summary : "Create a review to inspect diffs.";
   els.statFiles.textContent = `${session?.stats.files || 0} files`;
   els.statAdd.textContent = `+${session?.stats.additions || 0}`;
   els.statDel.textContent = `-${session?.stats.deletions || 0}`;
@@ -657,8 +780,12 @@ async function refreshSessions() {
     state.activeSession = state.sessions.find((session) => session.id === state.activeSession.id) || state.activeSession;
   } else if (state.sessions[0]) {
     const storedSessionID = readStoredState().activeSessionID;
-    selectSession(state.sessions.find((session) => session.id === storedSessionID) || state.sessions[0]);
-    return;
+    const restored = state.sessions.find((session) => session.id === storedSessionID) || state.sessions[0];
+    if (state.mode === "sessions") {
+      selectSession(restored);
+      return;
+    }
+    state.activeSession = restored;
   }
   await fetchExplanations();
   renderAll();
@@ -702,7 +829,7 @@ async function fetchLiveDiff() {
     }
     renderAll();
   } catch (error) {
-    els.summary.textContent = error.message;
+    if (els.summary) els.summary.textContent = error.message;
   }
 }
 
@@ -751,15 +878,35 @@ els.create.addEventListener("click", async () => {
   selectSession(session);
 });
 
-els.canvas.addEventListener("wheel", (event) => {
-  event.preventDefault();
+function scrollDiffBy(deltaY) {
   const max = Math.max(0, state.flatLines.length * rowHeight - els.canvas.getBoundingClientRect().height);
-  scrollY = Math.round(Math.max(0, Math.min(max, scrollY + event.deltaY)));
+  scrollY = Math.round(Math.max(0, Math.min(max, scrollY + deltaY)));
   if (state.activeFile) {
     writeStoredState({ scrollByFile: { ...(readStoredState().scrollByFile || {}), [state.activeFile.path]: scrollY } });
   }
   clampInlineReview();
   renderDiff();
+}
+
+function shouldKeepLocalWheel(event) {
+  const scrollable = event.target.closest("textarea, .comment-list");
+  if (!scrollable || !els.inlineReview.contains(scrollable)) return false;
+  const canScroll = scrollable.scrollHeight > scrollable.clientHeight;
+  if (!canScroll) return false;
+  const atTop = scrollable.scrollTop <= 0;
+  const atBottom = scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight - 1;
+  return (event.deltaY < 0 && !atTop) || (event.deltaY > 0 && !atBottom);
+}
+
+els.canvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  scrollDiffBy(event.deltaY);
+}, { passive: false });
+
+els.inlineReview.addEventListener("wheel", (event) => {
+  if (shouldKeepLocalWheel(event)) return;
+  event.preventDefault();
+  scrollDiffBy(event.deltaY);
 }, { passive: false });
 
 els.canvas.addEventListener("mousedown", (event) => {
@@ -807,10 +954,12 @@ els.canvas.addEventListener("mouseup", () => {
 
 els.explain.addEventListener("click", async () => {
   const range = selectedLineRange();
-  if (!state.activeSession || !state.activeFile || !range) return;
-  const result = await api(`/api/sessions/${state.activeSession.id}/explain`, {
+  if (!state.activeFile || !range) return;
+  const filePath = state.activeFile.path;
+  const session = await ensureReviewSession();
+  const result = await api(`/api/sessions/${session.id}/explain`, {
     method: "POST",
-    body: JSON.stringify({ filePath: state.activeFile.path, startLine: range.start, endLine: range.end }),
+    body: JSON.stringify({ filePath, startLine: range.start, endLine: range.end }),
   });
   els.explanation.textContent = result.summary || "Explanation requested — waiting for agent response.";
   startExplanationPoll();
@@ -820,13 +969,8 @@ els.saveFeedback.addEventListener("click", async () => {
   await saveFeedback();
 });
 
-els.submitReview.addEventListener("click", async () => {
-  if (!state.activeSession) return;
-  if (!window.confirm("Submit this review? The agent will receive all comments and may start making changes.")) return;
-  await api(`/api/sessions/${state.activeSession.id}/submit-review`, { method: "POST" });
-  state.reviewSubmitted = true;
-  renderAll();
-});
+els.panelSubmitReview.addEventListener("click", submitReview);
+els.panelAddComment.addEventListener("click", openInlineReviewForSelection);
 
 els.closeAgentPayload.addEventListener("click", () => {
   els.agentPayloadModal.classList.remove("visible");
@@ -838,13 +982,16 @@ els.clearSession.addEventListener("click", () => {
   window.location.reload();
 });
 
-els.showFileComments.addEventListener("click", () => {
-  els.fileCommentList.replaceChildren(...commentNodes(commentsForActiveFile()));
-  els.commentsModal.classList.add("visible");
-});
-
 els.closeCommentsModal.addEventListener("click", () => {
   els.commentsModal.classList.remove("visible");
+});
+
+els.showShortcuts.addEventListener("click", () => {
+  els.shortcutsModal.classList.add("visible");
+});
+
+els.closeShortcuts.addEventListener("click", () => {
+  els.shortcutsModal.classList.remove("visible");
 });
 
 els.commentList.addEventListener("click", async (event) => {
@@ -857,16 +1004,24 @@ els.fileCommentList.addEventListener("click", async (event) => {
   await deleteComment(button?.dataset.feedbackId);
 });
 
+els.reviewCommentList.addEventListener("click", async (event) => {
+  const button = event.target.closest(".delete-comment");
+  if (button) {
+    event.stopPropagation();
+    await deleteComment(button.dataset.feedbackId);
+    return;
+  }
+  const item = event.target.closest(".comment-item");
+  const comment = (state.activeSession?.feedback || []).find((entry) => entry.id === item?.dataset.feedbackId);
+  if (comment) focusComment(comment);
+});
+
+els.diffArea.addEventListener("focus", () => setFocusZone("diff"));
+els.reviewSection.addEventListener("focus", () => setFocusZone("queue"));
+
 els.feedback.addEventListener("input", () => {
   if (!state.activeFile || !selectedLineRange()) return;
   sessionStorage.setItem(draftKey(), els.feedback.value);
-});
-
-els.feedback.addEventListener("keydown", async (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-    event.preventDefault();
-    await saveFeedback();
-  }
 });
 
 els.closeFeedback.addEventListener("click", () => {
@@ -874,6 +1029,142 @@ els.closeFeedback.addEventListener("click", () => {
   state.inlineReviewOpen = false;
   renderAll();
 });
+
+function isTypingTarget(target) {
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName) || target?.isContentEditable;
+}
+
+function moveFile(delta) {
+  const files = allFiles();
+  if (!files.length) return;
+  const current = Math.max(0, files.findIndex((file) => file.path === state.activeFile?.path));
+  setActiveFile(files[Math.max(0, Math.min(files.length - 1, current + delta))]);
+}
+
+function hunkRows() {
+  return state.flatLines
+    .map((line, index) => ({ line, row: index + 1 }))
+    .filter((item) => item.line.kind === "hunk")
+    .map((item) => item.row);
+}
+
+function moveHunk(delta) {
+  const rows = hunkRows();
+  if (!rows.length) return;
+  const current = Math.max(1, Math.floor(scrollY / rowHeight) + 1);
+  const previous = rows.reduce((match, row) => (row < current ? row : match), rows[0]);
+  const target = delta > 0
+    ? rows.find((row) => row > current) || rows[rows.length - 1]
+    : previous;
+  scrollY = Math.max(0, (target - 1) * rowHeight);
+  state.selected = { start: target, end: target };
+  renderAll();
+}
+
+function moveSelectedLine(delta) {
+  if (!state.flatLines.length) return;
+  const current = state.selected.end || state.selected.start || Math.max(1, Math.floor(scrollY / rowHeight) + 1);
+  const target = Math.max(1, Math.min(state.flatLines.length, current + delta));
+  state.selected = { start: target, end: target };
+  const rect = els.canvas.getBoundingClientRect();
+  const rowTop = (target - 1) * rowHeight;
+  if (rowTop < scrollY) scrollY = rowTop;
+  if (rowTop + rowHeight > scrollY + rect.height) scrollY = rowTop + rowHeight - rect.height;
+  if (state.activeFile) {
+    writeStoredState({ scrollByFile: { ...(readStoredState().scrollByFile || {}), [state.activeFile.path]: scrollY } });
+  }
+  state.inlineReviewOpen = false;
+  renderAll();
+}
+
+function takeMotionCount() {
+  const count = Math.max(1, Number.parseInt(state.motionCount || "1", 10));
+  state.motionCount = "";
+  return count;
+}
+
+function moveComment(delta) {
+  const comments = state.activeSession?.feedback || [];
+  if (!comments.length) return;
+  const current = state.focusedCommentIndex < 0 ? (delta > 0 ? -1 : 0) : state.focusedCommentIndex;
+  state.focusedCommentIndex = Math.max(0, Math.min(comments.length - 1, current + delta));
+  setFocusZone("queue");
+  focusComment(comments[state.focusedCommentIndex]);
+}
+
+function toggleViewedActiveFile() {
+  if (!state.activeFile || els.viewedFile.disabled) return;
+  els.viewedFile.checked = !els.viewedFile.checked;
+  els.viewedFile.dispatchEvent(new Event("change"));
+}
+
+function registerReviewKeyboardNavigation() {
+  const zoneMotion = (delta) => {
+    const count = takeMotionCount();
+    if (state.focusZone === "queue") moveComment(delta * count);
+    else moveSelectedLine(delta * count);
+  };
+
+  const actions = {
+    "?": () => els.shortcutsModal.classList.add("visible"),
+    tab: () => toggleFocusZone(),
+    " ": () => openInlineReviewForSelection({ focusInput: state.focusZone === "diff" }),
+    arrowdown: () => zoneMotion(1),
+    arrowup: () => zoneMotion(-1),
+    j: () => zoneMotion(1),
+    k: () => zoneMotion(-1),
+    i: () => {
+      if (!state.inlineReviewOpen) openInlineReviewForSelection();
+      if (state.inlineReviewOpen) els.feedback.focus();
+    },
+    n: () => moveFile(1),
+    p: () => moveFile(-1),
+    v: () => toggleViewedActiveFile(),
+    f: () => els.files.querySelector("button")?.focus(),
+    escape: () => {
+      state.motionCount = "";
+      els.shortcutsModal.classList.remove("visible");
+      els.commentsModal.classList.remove("visible");
+      state.inlineReviewOpen = false;
+      renderAll();
+    },
+  };
+
+  window.addEventListener("keydown", async (event) => {
+    if (event.key === "Escape" && isTypingTarget(event.target)) {
+      event.preventDefault();
+      event.target.blur();
+      setFocusZone("diff");
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      if (isTypingTarget(event.target)) await saveFeedback();
+      else await submitReview();
+      return;
+    }
+    if (isTypingTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
+
+    const key = event.key.toLowerCase();
+    if (/^[0-9]$/.test(key)) {
+      if (key !== "0" || state.motionCount) {
+        event.preventDefault();
+        state.motionCount = `${state.motionCount}${key}`.slice(0, 3);
+      }
+      return;
+    }
+
+    const action = actions[key];
+    if (!action) {
+      state.motionCount = "";
+      return;
+    }
+    event.preventDefault();
+    action(event);
+  });
+}
+
+registerReviewKeyboardNavigation();
 
 window.addEventListener("resize", resizeCanvas);
 setMode("live");

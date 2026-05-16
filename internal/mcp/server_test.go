@@ -14,6 +14,10 @@ import (
 	"time"
 )
 
+func init() {
+	openBrowser = func(string) {}
+}
+
 func TestMCPInitialize(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
 	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{

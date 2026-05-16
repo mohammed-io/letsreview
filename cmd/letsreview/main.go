@@ -14,8 +14,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -29,7 +31,6 @@ const defaultAddr = "127.0.0.1:55492"
 type config struct {
 	addr     string
 	help     bool
-	openUI   bool
 	mcp      bool
 	repoPath string
 	stop     bool
@@ -93,11 +94,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 
 	project := projectResponse{ID: projectID(absRepo), RepoPath: absRepo, Repo: filepath.Base(absRepo)}
 	printProject(stdout, listener.Addr().String(), project)
-	if cfg.openUI {
-		fmt.Fprintln(stdout, "open the URL above in your browser")
-	}
 
-	err = app.Serve(listener)
+	err = app.ServeWithShutdown(ctx, listener)
 	os.Remove(pidPath)
 	return err
 }
@@ -169,8 +167,23 @@ func heartbeat(ctx context.Context, addr string, projectID string) error {
 }
 
 func printProject(stdout io.Writer, addr string, project projectResponse) {
-	fmt.Fprintf(stdout, "letsreview is running at http://%s?project=%s\n", addr, project.ID)
+	url := fmt.Sprintf("http://%s?project=%s", addr, project.ID)
+	fmt.Fprintf(stdout, "letsreview is running at %s\n", url)
 	fmt.Fprintf(stdout, "reviewing %s\n", project.RepoPath)
+	openBrowser(url)
+}
+
+var openBrowser = func(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	cmd.Start()
 }
 
 func projectID(absRepo string) string {
@@ -183,7 +196,6 @@ func parseConfig(args []string) (config, error) {
 	flags.SetOutput(io.Discard)
 	addr := flags.String("addr", defaultAddr, "address to listen on")
 	help := flags.Bool("help", false, "show help")
-	openUI := flags.Bool("open", false, "print browser URL only; opening browsers is left to the caller")
 	mcpMode := flags.Bool("mcp", false, "run as MCP server over stdio")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -202,7 +214,7 @@ func parseConfig(args []string) (config, error) {
 		}
 	}
 
-	return config{addr: *addr, help: *help, openUI: *openUI, mcp: *mcpMode, repoPath: repoPath, stop: stop}, nil
+	return config{addr: *addr, help: *help, mcp: *mcpMode, repoPath: repoPath, stop: stop}, nil
 }
 
 func printUsage(stdout io.Writer) {
@@ -223,8 +235,6 @@ Flags:
         show help
   -mcp
         run as MCP server over stdio
-  -open
-        print browser-open hint only; browser launch is left to caller
 
 Examples:
   letsreview .

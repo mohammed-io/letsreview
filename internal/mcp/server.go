@@ -9,7 +9,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -356,6 +358,7 @@ func (m *MCPServer) toolRequestCodeReview(ctx context.Context, raw json.RawMessa
 	}
 
 	url := fmt.Sprintf("http://%s?project=%s&session=%s", m.addr, project.ID, session.ID)
+	openBrowser(url)
 	return map[string]any{
 		"sessionId": session.ID,
 		"url":       url,
@@ -571,4 +574,17 @@ func toJSON(v any) string {
 		return fmt.Sprintf("error: %v", err)
 	}
 	return string(b)
+}
+
+var openBrowser = func(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	cmd.Start()
 }

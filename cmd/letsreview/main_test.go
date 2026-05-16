@@ -12,6 +12,10 @@ import (
 	"testing"
 )
 
+func init() {
+	openBrowser = func(string) {}
+}
+
 func TestParseConfigDefaultsToFixedPortAndCurrentRepo(t *testing.T) {
 	cfg, err := parseConfig(nil)
 	if err != nil {
@@ -27,16 +31,13 @@ func TestParseConfigDefaultsToFixedPortAndCurrentRepo(t *testing.T) {
 }
 
 func TestParseConfigAcceptsRepoPathAndAddressOverride(t *testing.T) {
-	cfg, err := parseConfig([]string{"-addr", "127.0.0.1:6000", "-open", "/tmp/repo"})
+	cfg, err := parseConfig([]string{"-addr", "127.0.0.1:6000", "/tmp/repo"})
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
 	}
 
 	if cfg.addr != "127.0.0.1:6000" {
 		t.Fatalf("expected address override, got %q", cfg.addr)
-	}
-	if !cfg.openUI {
-		t.Fatalf("expected open flag to be enabled")
 	}
 	if cfg.repoPath != "/tmp/repo" {
 		t.Fatalf("expected repo path override, got %q", cfg.repoPath)

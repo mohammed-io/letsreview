@@ -19,7 +19,6 @@
           </div>
           <div class="review-title">
             <h2 id="session-title">No review loaded</h2>
-            <p id="session-summary">Create a review to inspect diffs.</p>
           </div>
           <div class="mode-toggle">
             <button id="mode-live" class="mode-btn active">Live</button>
@@ -49,28 +48,26 @@
           <section class="sessions-popover" id="sessions-panel">
             <div id="sessions" class="sessions"></div>
           </section>
-          <div class="stats">
-            <span id="stat-files">0 files</span>
-            <span id="stat-add">+0</span>
-            <span id="stat-del">-0</span>
+          <div class="topbar-actions">
+            <div class="stats">
+              <span id="stat-files">0 files</span>
+              <span id="stat-add">+0</span>
+              <span id="stat-del">-0</span>
+            </div>
+            <button id="clear-session" class="secondary danger">Clear session</button>
           </div>
         </header>
 
         <div class="workspace">
           <nav class="files" id="files"></nav>
-          <section class="diff-area">
+          <section class="diff-area" tabindex="0">
             <div class="diff-toolbar">
               <span id="active-file">No file selected</span>
               <div class="diff-actions">
-                <span id="review-status" class="review-submitted" style="display:none">Review submitted</span>
                 <label class="viewed-toggle">
                   <input id="viewed-file" type="checkbox">
                   Viewed
                 </label>
-                <button id="explain-selection" class="secondary">Explain selection</button>
-                <button id="show-file-comments" class="secondary">Comments</button>
-                <button id="submit-review" class="secondary">Submit review</button>
-                <button id="clear-session" class="secondary danger">Clear session</button>
               </div>
             </div>
             <div class="diff-stage">
@@ -80,13 +77,60 @@
                   <strong id="inline-review-title">Add review comment</strong>
                   <button id="close-feedback" class="secondary" aria-label="Close feedback">Close</button>
                 </div>
-                <p id="explanation">Select diff rows, then ask for an explanation.</p>
+                <div class="inline-review-tools">
+                  <button id="explain-selection" class="secondary">Explain selection</button>
+                  <p id="explanation">Select diff rows, then ask for an explanation.</p>
+                </div>
                 <div class="comment-list" id="comment-list"></div>
                 <textarea id="feedback" placeholder="Leave a comment"></textarea>
                 <div class="inline-review-actions">
                   <button id="save-feedback">Save feedback <kbd class="shortcut"></kbd></button>
                 </div>
               </section>
+            </div>
+          </section>
+          <aside class="review-panel" aria-label="Review cockpit">
+            <div class="review-panel-head">
+              <div class="review-heading">
+                <p class="eyebrow">Review cockpit</p>
+                <h3>Feedback</h3>
+                <span id="review-status" class="review-submitted" style="display:none">Review submitted</span>
+              </div>
+              <button id="show-shortcuts" class="secondary icon-help" aria-label="Show shortcuts">?</button>
+            </div>
+            <div class="review-metrics" aria-label="Review metrics">
+              <div class="metric-card primary"><span>Comments</span><strong id="metric-comments">0</strong></div>
+              <div class="metric-card"><span>Drafts</span><strong id="metric-drafts">0</strong></div>
+              <div class="metric-card"><span>Viewed</span><strong id="metric-viewed">0/0</strong></div>
+            </div>
+            <div class="review-panel-actions">
+              <button id="panel-add-comment" class="secondary">Comment</button>
+              <button id="panel-submit-review">Submit <kbd class="mod-enter"></kbd></button>
+            </div>
+            <div class="review-section grow" tabindex="0">
+              <div class="review-section-title">Queue</div>
+              <div class="comment-list emphasized" id="review-comment-list"></div>
+            </div>
+          </aside>
+          <section class="modal" id="shortcuts-modal" aria-label="Keyboard shortcuts">
+            <div class="modal-dialog shortcuts-dialog">
+              <div class="modal-header">
+                <strong>Keyboard shortcuts</strong>
+                <button id="close-shortcuts" class="secondary">Close</button>
+              </div>
+              <div class="shortcut-grid">
+                <span><kbd>?</kbd> Shortcuts</span>
+                <span><kbd>N</kbd>/<kbd>P</kbd> Next/prev file</span>
+                <span><kbd>Tab</kbd> Toggle diff/queue</span>
+                <span><kbd>↓</kbd>/<kbd>↑</kbd> Move in active zone</span>
+                <span><kbd>J</kbd>/<kbd>K</kbd> Move · count prefix like <kbd>10J</kbd></span>
+                <span><kbd>Space</kbd> Open inline review</span>
+                <span><kbd>I</kbd> Focus comment input</span>
+                <span><kbd>V</kbd> Toggle viewed</span>
+                <span><kbd>F</kbd> Focus files</span>
+                <span><kbd>Esc</kbd> Leave input / close panel</span>
+                <span><kbd>⌘/Ctrl</kbd>+<kbd>Enter</kbd> Submit/save</span>
+              </div>
             </div>
           </section>
           <section class="modal" id="comments-modal" aria-label="File comments">
@@ -110,6 +154,7 @@
         </div>
       </section>
     </main>
+    <script src="/idiomorph.min.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>
