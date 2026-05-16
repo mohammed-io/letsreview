@@ -663,7 +663,7 @@ async function saveFeedback() {
 
 async function submitReview() {
   if (!state.activeSession || totalCommentCount() === 0) return;
-  if (!window.prompt("Submit this review? The agent will receive all comments and may start making changes.")) return;
+  if (window.prompt("Submit this review? The agent will receive all comments and may start making changes.") === null) return;
   await api(`/api/sessions/${state.activeSession.id}/submit-review`, { method: "POST" });
   renderAll();
 }
