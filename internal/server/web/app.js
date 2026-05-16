@@ -4,6 +4,7 @@ const state = {
   sessions: [],
   activeSession: null,
   activeFile: null,
+  codeLineCount: 0,
   flatLines: [],
   selected: { start: 0, end: 0 },
   liveData: null,
@@ -421,7 +422,14 @@ function roundRect(x, y, width, height, radius) {
   ctx.closePath();
 }
 
+const canvasBottomPadding = 20;
+
 function drawRow(line, index, y, width) {
+  if (line.kind === "padding") {
+    ctx.fillStyle = canvasTheme.bg;
+    ctx.fillRect(0, y, width, rowHeight);
+    return;
+  }
   const selected = state.selected.start && index >= Math.min(state.selected.start, state.selected.end) && index <= Math.max(state.selected.start, state.selected.end);
   const bg = line.kind === "add" ? canvasTheme.addBg : line.kind === "del" ? canvasTheme.delBg : line.kind === "hunk" ? canvasTheme.hunkBg : canvasTheme.bg;
   const gutterBg = line.kind === "add" ? canvasTheme.addGutter : line.kind === "del" ? canvasTheme.delGutter : line.kind === "hunk" ? canvasTheme.hunkBg : canvasTheme.gutter;
@@ -461,7 +469,7 @@ function drawHighlightedText(text, x, y, kind) {
 
 function rowFromEvent(event) {
   const rect = els.canvas.getBoundingClientRect();
-  return Math.max(1, Math.min(state.flatLines.length, Math.floor((event.clientY - rect.top + scrollY) / rowHeight) + 1));
+  return clampToCodeLines(Math.floor((event.clientY - rect.top + scrollY) / rowHeight) + 1);
 }
 
 function selectSession(session) {
@@ -504,7 +512,11 @@ function renderAll() {
     renderHeader();
     renderFiles();
   }
-  state.flatLines = state.activeFile && !isFileViewed(state.activeFile) ? flatten(state.activeFile) : [];
+  const codeLines = state.activeFile && !isFileViewed(state.activeFile) ? flatten(state.activeFile) : [];
+  state.flatLines = codeLines.length
+    ? [...codeLines, ...Array.from({ length: canvasBottomPadding }, () => ({ kind: "padding" }))]
+    : [];
+  state.codeLineCount = codeLines.length;
   els.activeFile.textContent = state.activeFile ? state.activeFile.path : "No file selected";
   els.viewedFile.checked = Boolean(state.activeFile && isFileViewed(state.activeFile));
   els.viewedFile.disabled = !state.activeFile;
@@ -519,17 +531,6 @@ function renderAll() {
   renderReviewPanel();
   renderFocusZone();
   renderDiff();
-}
-
-function ensureInlineReviewVisible() {
-  if (!state.inlineReviewOpen || !state.selected.start) return;
-  const end = Math.max(state.selected.start, state.selected.end);
-  const stage = els.canvas.getBoundingClientRect();
-  const panelHeight = els.inlineReview.offsetHeight || 240;
-  const anchorY = end * rowHeight - scrollY + 6;
-  const revealBuffer = Math.max(72, rowHeight * 4);
-  const overflow = anchorY + panelHeight + revealBuffer - stage.height;
-  if (overflow > 0) scrollDiffBy(overflow);
 }
 
 function renderInlineReview() {
@@ -711,9 +712,6 @@ function openInlineReviewForSelection(options = {}) {
   if (!state.activeFile || !selectedLineRange() || state.reviewSubmitted) return;
   state.inlineReviewOpen = true;
   renderAll();
-  ensureInlineReviewVisible();
-  renderInlineReview();
-  renderDiff();
   if (options.focusInput) els.feedback.focus();
 }
 
@@ -1061,10 +1059,15 @@ function moveHunk(delta) {
   renderAll();
 }
 
+function clampToCodeLines(line) {
+  const max = state.codeLineCount || state.flatLines.length;
+  return Math.max(1, Math.min(max, line));
+}
+
 function moveSelectedLine(delta) {
   if (!state.flatLines.length) return;
   const current = state.selected.end || state.selected.start || Math.max(1, Math.floor(scrollY / rowHeight) + 1);
-  const target = Math.max(1, Math.min(state.flatLines.length, current + delta));
+  const target = clampToCodeLines(current + delta);
   state.selected = { start: target, end: target };
   const rect = els.canvas.getBoundingClientRect();
   const rowTop = (target - 1) * rowHeight;
