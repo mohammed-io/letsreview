@@ -1,3 +1,24 @@
+## [v0.0.2] - 2026-05-16
+
+[Full Changelog](https://github.com/mohammed-io/letsreview/compare/v0.0.1...v0.0.2)
+
+### Added
+- add comment resolve status for AI agent feedback ([3cfdee7](https://github.com/mohammed-io/letsreview/commit/3cfdee71397b99e98653aa00eebe773a703935c2))
+
+### Fixed
+- it's ok to leave the field empty ([c1ebb6b](https://github.com/mohammed-io/letsreview/commit/c1ebb6bfb775a14d93f86c36887d0bb06219eb48))
+
+### Changed
+- migrate to cobra, require repo arg ([29c46a0](https://github.com/mohammed-io/letsreview/commit/29c46a00362aa45eb9bbd7c86f4638231bc30992))
+
+<details>
+<summary>Other</summary>
+
+- Add option for no-open ([7e22fc5](https://github.com/mohammed-io/letsreview/commit/7e22fc5373dfee50e61ea0d47524cb2888dff48f))
+
+</details>
+
+
 ## [v0.0.1] - 2026-05-16
 
 [Full Changelog](https://github.com/mohammed-io/letsreview/compare/...v0.0.1)
