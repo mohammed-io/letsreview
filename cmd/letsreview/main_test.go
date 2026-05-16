@@ -141,24 +141,70 @@ func TestRegisterProjectAndHeartbeatUseExistingServerAPI(t *testing.T) {
 
 func TestWriteAndReadPIDFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.pid")
-	if err := writePIDFile(path, 12345, "127.0.0.1:55492"); err != nil {
+	if err := appendPIDFile(path, 12345, "127.0.0.1:55492"); err != nil {
 		t.Fatalf("write pid: %v", err)
 	}
-	entry, err := readPIDFile(path)
+	entries, err := readAllPIDEntries(path)
 	if err != nil {
 		t.Fatalf("read pid: %v", err)
 	}
-	if entry.PID != 12345 {
-		t.Fatalf("expected pid 12345, got %d", entry.PID)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
-	if entry.Addr != "127.0.0.1:55492" {
-		t.Fatalf("expected addr, got %q", entry.Addr)
+	if entries[0].PID != 12345 {
+		t.Fatalf("expected pid 12345, got %d", entries[0].PID)
+	}
+	if entries[0].Addr != "127.0.0.1:55492" {
+		t.Fatalf("expected addr, got %q", entries[0].Addr)
+	}
+}
+
+func TestAppendPIDFileMultipleEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.pid")
+	if err := appendPIDFile(path, 111, "127.0.0.1:55492"); err != nil {
+		t.Fatalf("append 1: %v", err)
+	}
+	if err := appendPIDFile(path, 222, "127.0.0.1:55493"); err != nil {
+		t.Fatalf("append 2: %v", err)
+	}
+	entries, err := readAllPIDEntries(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].PID != 111 || entries[1].PID != 222 {
+		t.Fatalf("expected pids 111,222 got %d,%d", entries[0].PID, entries[1].PID)
+	}
+}
+
+func TestRemovePIDEntryDeletesFileWhenEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.pid")
+	appendPIDFile(path, 111, "127.0.0.1:55492")
+	removePIDEntry(path, 111)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("expected pid file deleted after removing last entry")
+	}
+}
+
+func TestRemovePIDEntryKeepsOthers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.pid")
+	appendPIDFile(path, 111, "127.0.0.1:55492")
+	appendPIDFile(path, 222, "127.0.0.1:55493")
+	removePIDEntry(path, 111)
+	entries, err := readAllPIDEntries(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(entries) != 1 || entries[0].PID != 222 {
+		t.Fatalf("expected 1 entry with pid 222, got %v", entries)
 	}
 }
 
 func TestWritePIDFileCreatesDir(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "dir", "server.pid")
-	if err := writePIDFile(path, 999, "127.0.0.1:9000"); err != nil {
+	if err := appendPIDFile(path, 999, "127.0.0.1:9000"); err != nil {
 		t.Fatalf("write pid with mkdir: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -175,15 +221,15 @@ func TestReadPIDFileMissingReturnsError(t *testing.T) {
 
 func TestReadPIDFileDefaultsAddr(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.pid")
-	if err := writePIDFile(path, 42, ""); err != nil {
+	if err := appendPIDFile(path, 42, ""); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	entry, err := readPIDFile(path)
+	entries, err := readAllPIDEntries(path)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if entry.Addr != defaultAddr {
-		t.Fatalf("expected default addr, got %q", entry.Addr)
+	if entries[0].Addr != defaultAddr {
+		t.Fatalf("expected default addr, got %q", entries[0].Addr)
 	}
 }
 
@@ -205,7 +251,7 @@ func TestStopServerCleansStalePID(t *testing.T) {
 	pidFilePath = func() string { return path }
 	defer func() { pidFilePath = origPidFilePath }()
 
-	if err := writePIDFile(path, 99999999, defaultAddr); err != nil {
+	if err := appendPIDFile(path, 99999999, defaultAddr); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	var stdout bytes.Buffer

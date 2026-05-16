@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -87,7 +88,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 
 	pidPath := pidFilePath()
-	if err := writePIDFile(pidPath, os.Getpid(), cfg.addr); err != nil {
+	if err := appendPIDFile(pidPath, os.Getpid(), cfg.addr); err != nil {
 		listener.Close()
 		return fmt.Errorf("write pid file: %w", err)
 	}
@@ -96,7 +97,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	printProject(stdout, listener.Addr().String(), project)
 
 	err = app.ServeWithShutdown(ctx, listener)
-	os.Remove(pidPath)
+	removePIDEntry(pidPath, os.Getpid())
 	return err
 }
 
@@ -255,15 +256,21 @@ func defaultPIDFilePath() string {
 	return filepath.Join(home, ".local", "share", "letsreview", "server.pid")
 }
 
-func writePIDFile(path string, pid int, addr string) error {
+func appendPIDFile(path string, pid int, addr string) error {
 	if path == "" {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	content := fmt.Sprintf("%d\n%s\n", pid, addr)
-	return os.WriteFile(path, []byte(content), 0644)
+	entry := fmt.Sprintf("%d %s\n", pid, addr)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(entry)
+	return err
 }
 
 type pidEntry struct {
@@ -271,27 +278,63 @@ type pidEntry struct {
 	Addr string
 }
 
-func readPIDFile(path string) (pidEntry, error) {
+func readAllPIDEntries(path string) ([]pidEntry, error) {
 	if path == "" {
-		return pidEntry{}, errors.New("no pid file path")
+		return nil, errors.New("no pid file path")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		return nil, err
+	}
+	var entries []pidEntry
+	for _, line := range splitLines(string(data)) {
+		parts := splitBy(line, ' ')
+		if len(parts) < 1 {
+			continue
+		}
+		pid, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+		addr := defaultAddr
+		if len(parts) >= 2 && parts[1] != "" {
+			addr = parts[1]
+		}
+		entries = append(entries, pidEntry{PID: pid, Addr: addr})
+	}
+	if len(entries) == 0 {
+		return nil, errors.New("empty pid file")
+	}
+	return entries, nil
+}
+
+func removePIDEntry(path string, pid int) {
+	if path == "" {
+		return
+	}
+	entries, err := readAllPIDEntries(path)
+	if err != nil {
+		return
+	}
+	var remaining []string
+	for _, e := range entries {
+		if e.PID != pid {
+			remaining = append(remaining, fmt.Sprintf("%d %s", e.PID, e.Addr))
+		}
+	}
+	if len(remaining) == 0 {
+		os.Remove(path)
+		return
+	}
+	os.WriteFile(path, []byte(strings.Join(remaining, "\n")+"\n"), 0644)
+}
+
+func readPIDFile(path string) (pidEntry, error) {
+	entries, err := readAllPIDEntries(path)
+	if err != nil {
 		return pidEntry{}, err
 	}
-	lines := splitLines(string(data))
-	if len(lines) < 1 {
-		return pidEntry{}, errors.New("empty pid file")
-	}
-	pid, err := strconv.Atoi(lines[0])
-	if err != nil {
-		return pidEntry{}, fmt.Errorf("parse pid: %w", err)
-	}
-	addr := defaultAddr
-	if len(lines) >= 2 && lines[1] != "" {
-		addr = lines[1]
-	}
-	return pidEntry{PID: pid, Addr: addr}, nil
+	return entries[0], nil
 }
 
 func isProcessAlive(pid int) bool {
@@ -308,7 +351,7 @@ func stopServer(stdout io.Writer) error {
 	if path == "" {
 		return errors.New("cannot determine pid file path")
 	}
-	entry, err := readPIDFile(path)
+	entries, err := readAllPIDEntries(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Fprintln(stdout, "no letsreview server is running")
@@ -317,28 +360,39 @@ func stopServer(stdout io.Writer) error {
 		return fmt.Errorf("read pid file: %w", err)
 	}
 
-	if !isProcessAlive(entry.PID) {
+	var alive []pidEntry
+	for _, entry := range entries {
+		if !isProcessAlive(entry.PID) {
+			fmt.Fprintf(stdout, "stale pid %d skipped (not running)\n", entry.PID)
+			continue
+		}
+		alive = append(alive, entry)
+	}
+
+	if len(alive) == 0 {
 		os.Remove(path)
-		fmt.Fprintln(stdout, "stale pid file removed (server not running)")
+		fmt.Fprintln(stdout, "stale pid file removed (no live servers)")
 		return nil
 	}
 
-	proc, err := os.FindProcess(entry.PID)
-	if err != nil {
-		return fmt.Errorf("find process %d: %w", entry.PID, err)
-	}
-
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		return fmt.Errorf("send SIGTERM to %d: %w", entry.PID, err)
-	}
-
-	if err := waitExit(proc, 5*time.Second); err != nil {
-		fmt.Fprintf(stdout, "server (pid %d) did not exit cleanly, killing\n", entry.PID)
-		proc.Signal(syscall.SIGKILL)
+	for _, entry := range alive {
+		proc, err := os.FindProcess(entry.PID)
+		if err != nil {
+			fmt.Fprintf(stdout, "find process %d: %v\n", entry.PID, err)
+			continue
+		}
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			fmt.Fprintf(stdout, "SIGTERM to %d: %v\n", entry.PID, err)
+			continue
+		}
+		if err := waitExit(proc, 5*time.Second); err != nil {
+			fmt.Fprintf(stdout, "server (pid %d) did not exit cleanly, killing\n", entry.PID)
+			proc.Signal(syscall.SIGKILL)
+		}
+		fmt.Fprintf(stdout, "server (pid %d) stopped\n", entry.PID)
 	}
 
 	os.Remove(path)
-	fmt.Fprintf(stdout, "server (pid %d) stopped\n", entry.PID)
 	return nil
 }
 

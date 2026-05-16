@@ -177,11 +177,6 @@ func TestSubmitReviewStoresComments(t *testing.T) {
 		"body":      "Also this.",
 	})
 
-	status := getJSON[map[string]string](t, app.Handler(), "/api/sessions/"+session.ID+"/review-status")
-	if status["status"] != "pending" {
-		t.Fatalf("expected pending before submit, got %q", status["status"])
-	}
-
 	submitReq := httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/submit-review", nil)
 	submitRec := httptest.NewRecorder()
 	app.Handler().ServeHTTP(submitRec, submitReq)
@@ -200,20 +195,24 @@ func TestSubmitReviewStoresComments(t *testing.T) {
 		t.Fatalf("expected 2 comments, got %v", submitResult["commentCount"])
 	}
 
-	status = getJSON[map[string]string](t, app.Handler(), "/api/sessions/"+session.ID+"/review-status")
-	if status["status"] != "submitted" {
-		t.Fatalf("expected submitted after submit, got %q", status["status"])
+	events := app.Store().GetEventsAfter(session.ID, 0)
+	if len(events) == 0 {
+		t.Fatal("expected at least 1 event after submit")
 	}
-
-	review, ok := app.Store().GetSubmittedReview(session.ID)
-	if !ok {
-		t.Fatal("expected submitted review in store")
+	found := false
+	for _, e := range events {
+		if e.Type == "review_submitted" && e.Review != nil {
+			found = true
+			if len(e.Review.Comments) != 2 {
+				t.Fatalf("expected 2 review comments, got %d", len(e.Review.Comments))
+			}
+			if e.Review.Comments[0].Body != "Fix this." {
+				t.Fatalf("expected first comment body, got %q", e.Review.Comments[0].Body)
+			}
+		}
 	}
-	if len(review.Comments) != 2 {
-		t.Fatalf("expected 2 review comments, got %d", len(review.Comments))
-	}
-	if review.Comments[0].Body != "Fix this." {
-		t.Fatalf("expected first comment body, got %q", review.Comments[0].Body)
+	if !found {
+		t.Fatal("expected review_submitted event with review")
 	}
 }
 

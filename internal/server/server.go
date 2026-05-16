@@ -35,11 +35,10 @@ type Server struct {
 type Store struct {
 	mu       sync.RWMutex
 	Projects map[string]*Project
-
-	submittedReviews map[string]SubmittedReview
 	events           map[string][]ReviewEvent
 	waiters          map[string][]eventWaiter
 	nextEventSeq     int64
+	OnEventPublished func(event ReviewEvent)
 }
 
 type Project struct {
@@ -119,6 +118,7 @@ type ReviewEvent struct {
 	CreatedAt          time.Time           `json:"createdAt"`
 	Review             *SubmittedReview    `json:"review,omitempty"`
 	ExplanationRequest *ExplanationRequest `json:"explanationRequest,omitempty"`
+	Explanation        *Explanation        `json:"explanation,omitempty"`
 }
 
 type eventWaiter struct {
@@ -128,29 +128,14 @@ type eventWaiter struct {
 
 func NewStore() *Store {
 	return &Store{
-		Projects:         map[string]*Project{},
-		submittedReviews: map[string]SubmittedReview{},
-		events:           map[string][]ReviewEvent{},
-		waiters:          map[string][]eventWaiter{},
+		Projects: map[string]*Project{},
+		events:   map[string][]ReviewEvent{},
+		waiters:  map[string][]eventWaiter{},
 	}
-}
-
-func (s *Store) GetSubmittedReview(sessionID string) (SubmittedReview, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	r, ok := s.submittedReviews[sessionID]
-	return r, ok
-}
-
-func (s *Store) SetSubmittedReview(sessionID string, review SubmittedReview) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.submittedReviews[sessionID] = review
 }
 
 func (s *Store) PublishReviewEvent(event ReviewEvent) ReviewEvent {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	s.nextEventSeq++
 	event.Seq = s.nextEventSeq
@@ -175,7 +160,31 @@ func (s *Store) PublishReviewEvent(event ReviewEvent) ReviewEvent {
 	} else {
 		s.waiters[event.SessionID] = remaining
 	}
+	cb := s.OnEventPublished
+	s.mu.Unlock()
+
+	if cb != nil {
+		cb(event)
+	}
 	return event
+}
+
+func (s *Store) GetEventsAfter(sessionID string, afterSeq int64) []ReviewEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []ReviewEvent
+	for _, event := range s.events[sessionID] {
+		if event.Seq > afterSeq {
+			result = append(result, event)
+		}
+	}
+	return result
+}
+
+func (s *Store) LastEventSeq() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.nextEventSeq
 }
 
 func (s *Store) WaitForReviewEvent(ctx context.Context, sessionID string, afterSeq int64) (ReviewEvent, bool) {
@@ -354,10 +363,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/projects/{projectID}/sessions/{id}/feedback/{feedbackID}", s.projectDeleteFeedback)
 	s.mux.HandleFunc("GET /api/projects/{projectID}/sessions/{id}/agent-payload", s.projectAgentPayload)
 	s.mux.HandleFunc("POST /api/projects/{projectID}/sessions/{id}/submit-review", s.projectSubmitReview)
-	s.mux.HandleFunc("GET /api/projects/{projectID}/sessions/{id}/review-status", s.projectReviewStatus)
 	s.mux.HandleFunc("POST /api/projects/{projectID}/sessions/{id}/explanations", s.projectAddExplanation)
 	s.mux.HandleFunc("GET /api/projects/{projectID}/sessions/{id}/explanations", s.projectListExplanations)
 	s.mux.HandleFunc("GET /api/projects/{projectID}/sessions/{id}/explanation-requests", s.projectListExplanationRequests)
+
 	s.mux.HandleFunc("GET /api/live", s.liveDiff)
 	s.mux.HandleFunc("GET /api/sessions", s.listSessions)
 	s.mux.HandleFunc("POST /api/sessions", s.createSession)
@@ -368,7 +377,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/sessions/{id}/feedback/{feedbackID}", s.deleteFeedback)
 	s.mux.HandleFunc("GET /api/sessions/{id}/agent-payload", s.agentPayload)
 	s.mux.HandleFunc("POST /api/sessions/{id}/submit-review", s.submitReview)
-	s.mux.HandleFunc("GET /api/sessions/{id}/review-status", s.reviewStatus)
 	s.mux.HandleFunc("POST /api/sessions/{id}/explanations", s.addExplanation)
 	s.mux.HandleFunc("GET /api/sessions/{id}/explanations", s.listExplanations)
 	s.mux.HandleFunc("GET /api/sessions/{id}/explanation-requests", s.listExplanationRequests)
@@ -808,7 +816,6 @@ func (s *Server) submitReviewFor(w http.ResponseWriter, r *http.Request, project
 		Summary:     session.Summary,
 	}
 
-	s.store.SetSubmittedReview(session.ID, review)
 	s.store.PublishReviewEvent(ReviewEvent{
 		Type:      "review_submitted",
 		ProjectID: projectID,
@@ -816,29 +823,6 @@ func (s *Server) submitReviewFor(w http.ResponseWriter, r *http.Request, project
 		Review:    &review,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "submitted", "sessionId": session.ID, "commentCount": len(comments)})
-}
-
-func (s *Server) reviewStatus(w http.ResponseWriter, r *http.Request) {
-	s.reviewStatusFor(w, r, s.defaultProjectID)
-}
-
-func (s *Server) projectReviewStatus(w http.ResponseWriter, r *http.Request) {
-	s.reviewStatusFor(w, r, r.PathValue("projectID"))
-}
-
-func (s *Server) reviewStatusFor(w http.ResponseWriter, r *http.Request, projectID string) {
-	sessionID := r.PathValue("id")
-	if _, ok := s.session(projectID, sessionID); !ok {
-		writeError(w, http.StatusNotFound, errors.New("session not found"))
-		return
-	}
-
-	_, submitted := s.store.GetSubmittedReview(sessionID)
-	status := "pending"
-	if submitted {
-		status = "submitted"
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": status, "sessionId": sessionID})
 }
 
 func (s *Server) addExplanation(w http.ResponseWriter, r *http.Request) {

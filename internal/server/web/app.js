@@ -13,7 +13,6 @@ const state = {
   inlineReviewOpen: false,
   pendingReviewOpen: false,
   viewedFiles: new Set(),
-  reviewSubmitted: false,
   focusedCommentIndex: -1,
   explanations: [],
   explanationPollInterval: null,
@@ -53,7 +52,6 @@ const els = {
   commentsModal: document.querySelector("#comments-modal"),
   closeCommentsModal: document.querySelector("#close-comments-modal"),
   fileCommentList: document.querySelector("#file-comment-list"),
-  reviewStatus: document.querySelector("#review-status"),
   clearSession: document.querySelector("#clear-session"),
   agentPayloadModal: document.querySelector("#agent-payload-modal"),
   closeAgentPayload: document.querySelector("#close-agent-payload"),
@@ -522,11 +520,9 @@ function renderAll() {
   els.viewedFile.disabled = !state.activeFile;
   const hasSelection = Boolean(selectedLineRange());
   const canReviewSelection = Boolean(state.activeFile && hasSelection);
-  els.explain.disabled = !canReviewSelection || state.reviewSubmitted;
-  els.saveFeedback.disabled = !canReviewSelection || state.reviewSubmitted;
-  els.clearSession.disabled = state.reviewSubmitted || (!state.activeSession && !sessionStorage.getItem(storageKey("state")));
-  if (state.reviewSubmitted) els.inlineReview.classList.remove("visible");
-  els.reviewStatus.style.display = state.reviewSubmitted ? "" : "none";
+  els.explain.disabled = !canReviewSelection;
+  els.saveFeedback.disabled = !canReviewSelection;
+  els.clearSession.disabled = !state.activeSession && !sessionStorage.getItem(storageKey("state"));
   renderInlineReview();
   renderReviewPanel();
   renderFocusZone();
@@ -666,10 +662,9 @@ async function saveFeedback() {
 }
 
 async function submitReview() {
-  if (!state.activeSession || state.reviewSubmitted || totalCommentCount() === 0) return;
-  if (!window.confirm("Submit this review? The agent will receive all comments and may start making changes.")) return;
+  if (!state.activeSession || totalCommentCount() === 0) return;
+  if (!window.prompt("Submit this review? The agent will receive all comments and may start making changes.")) return;
   await api(`/api/sessions/${state.activeSession.id}/submit-review`, { method: "POST" });
-  state.reviewSubmitted = true;
   renderAll();
 }
 
@@ -1103,11 +1098,34 @@ function toggleViewedActiveFile() {
   els.viewedFile.dispatchEvent(new Event("change"));
 }
 
+function listenToShiftKey() {
+  let pressed = false;
+  window.addEventListener("keydown", (e) => { if (e.key === "Shift") pressed = true; });
+  window.addEventListener("keyup", (e) => { if (e.key === "Shift") pressed = false; });
+  return { isShiftPressed: () => pressed };
+}
+
 function registerReviewKeyboardNavigation() {
+  const { isShiftPressed } = listenToShiftKey();
+
   const zoneMotion = (delta) => {
     const count = takeMotionCount();
     if (state.focusZone === "queue") moveComment(delta * count);
     else moveSelectedLine(delta * count);
+  };
+
+  const zoneExtend = (delta) => {
+    const count = takeMotionCount();
+    if (state.focusZone === "queue") { moveComment(delta * count); return; }
+    const current = state.selected.end || state.selected.start || Math.max(1, Math.floor(scrollY / rowHeight) + 1);
+    const target = clampToCodeLines(current + delta * count);
+    state.selected = { start: state.selected.start || target, end: target };
+    const rect = els.canvas.getBoundingClientRect();
+    const rowTop = (target - 1) * rowHeight;
+    if (rowTop < scrollY) scrollY = rowTop;
+    if (rowTop + rowHeight > scrollY + rect.height) scrollY = rowTop + rowHeight - rect.height;
+    state.inlineReviewOpen = false;
+    renderAll();
   };
 
   const actions = {
@@ -1116,8 +1134,8 @@ function registerReviewKeyboardNavigation() {
     " ": () => openInlineReviewForSelection({ focusInput: state.focusZone === "diff" }),
     arrowdown: () => zoneMotion(1),
     arrowup: () => zoneMotion(-1),
-    j: () => zoneMotion(1),
-    k: () => zoneMotion(-1),
+    j: () => isShiftPressed() ? zoneExtend(1) : zoneMotion(1),
+    k: () => isShiftPressed() ? zoneExtend(-1) : zoneMotion(-1),
     i: () => {
       if (!state.inlineReviewOpen) openInlineReviewForSelection();
       if (state.inlineReviewOpen) els.feedback.focus();
@@ -1183,11 +1201,6 @@ resizeCanvas();
       const found = state.sessions.find((s) => s.id === sessionID);
       if (found) {
         selectSession(found);
-        const status = await api(`/api/sessions/${sessionID}/review-status`);
-        if (status.status === "submitted") {
-          state.reviewSubmitted = true;
-          renderAll();
-        }
       }
     };
     check();

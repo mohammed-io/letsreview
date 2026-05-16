@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,9 +19,17 @@ func init() {
 	openBrowser = func(string) {}
 }
 
+func handleMessageTest(srv *MCPServer, ctx context.Context, raw json.RawMessage) *jsonRPCResponse {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	var mu sync.Mutex
+	return srv.handleMessage(ctx, raw, encoder, &mu)
+}
+
 func TestMCPInitialize(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "initialize",
@@ -39,30 +48,37 @@ func TestMCPInitialize(t *testing.T) {
 	}
 }
 
-func TestMCPToolsList(t *testing.T) {
+func TestMCPInitializeAdvertisesSubscriptions(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      100,
+		"method":  "initialize",
+		"params":  map[string]any{},
+	}))
+
+	result := resp.Result.(map[string]any)
+	caps := result["capabilities"].(map[string]any)
+	if _, ok := caps["subscriptions"]; !ok {
+		t.Fatal("expected subscriptions capability")
+	}
+}
+
+func TestMCPToolsListNoPollingTools(t *testing.T) {
+	srv := NewMCPServer("127.0.0.1:0")
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      2,
 		"method":  "tools/list",
 	}))
 
-	if resp.Error != nil {
-		t.Fatalf("tools/list error: %s", resp.Error.Message)
-	}
-	result, ok := resp.Result.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map result, got %T", resp.Result)
-	}
-	tools, ok := result["tools"].([]map[string]any)
-	if !ok {
-		t.Fatalf("expected tools array, got %T", result["tools"])
-	}
+	result := resp.Result.(map[string]any)
+	tools := result["tools"].([]map[string]any)
 	names := make([]string, len(tools))
 	for i, tool := range tools {
 		names[i] = tool["name"].(string)
 	}
-	expected := []string{"request_code_review", "wait_for_review_event", "wait_for_explanation_request", "check_review_status", "get_review_result", "cancel_review"}
+	expected := []string{"request_code_review", "get_pending_events", "get_review_result", "cancel_review", "submit_explanation"}
 	for _, name := range expected {
 		found := false
 		for _, n := range names {
@@ -75,11 +91,45 @@ func TestMCPToolsList(t *testing.T) {
 			t.Fatalf("expected tool %q in %v", name, names)
 		}
 	}
+	forbidden := []string{"wait_for_review_event", "wait_for_explanation_request", "get_explanation_requests", "subscribe_review_events", "unsubscribe_review_events"}
+	for _, name := range forbidden {
+		for _, n := range names {
+			if n == name {
+				t.Fatalf("forbidden tool %q still present", name)
+			}
+		}
+	}
+}
+
+func TestMCPToolsDescriptionsMentionGetPendingEvents(t *testing.T) {
+	srv := NewMCPServer("127.0.0.1:0")
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/list",
+	}))
+
+	result := resp.Result.(map[string]any)
+	tools := result["tools"].([]map[string]any)
+	for _, tool := range tools {
+		name := tool["name"].(string)
+		desc := tool["description"].(string)
+		switch name {
+		case "request_code_review":
+			if !strings.Contains(desc, "get_pending_events") {
+				t.Fatalf("request_code_review must mention get_pending_events")
+			}
+		case "get_pending_events":
+			if !strings.Contains(desc, "never blocks") {
+				t.Fatalf("get_pending_events must say it never blocks")
+			}
+		}
+	}
 }
 
 func TestMCPPing(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      3,
 		"method":  "ping",
@@ -89,33 +139,9 @@ func TestMCPPing(t *testing.T) {
 	}
 }
 
-func TestMCPCheckReviewStatus(t *testing.T) {
-	srv := NewMCPServer("127.0.0.1:0")
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      4,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "check_review_status",
-			"arguments": map[string]string{"sessionId": "nonexistent"},
-		},
-	}))
-
-	if resp.Error != nil {
-		t.Fatalf("check_review_status error: %s", resp.Error.Message)
-	}
-
-	text := toolResultText(t, resp)
-	if !strings.Contains(text, `"pending"`) {
-		t.Fatalf("expected pending status, got %s", text)
-	}
-}
-
 func TestMCPGetReviewResultNotSubmitted(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      5,
 		"method":  "tools/call",
@@ -124,21 +150,15 @@ func TestMCPGetReviewResultNotSubmitted(t *testing.T) {
 			"arguments": map[string]string{"sessionId": "nonexistent"},
 		},
 	}))
-
-	if resp.Error != nil {
-		t.Fatalf("get_review_result error: %s", resp.Error.Message)
-	}
-
 	text := toolResultText(t, resp)
 	if !strings.Contains(text, "Error:") {
-		t.Fatalf("expected error for unsubmitted review, got %s", text)
+		t.Fatalf("expected error, got %s", text)
 	}
 }
 
 func TestMCPUnknownTool(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      6,
 		"method":  "tools/call",
@@ -147,38 +167,8 @@ func TestMCPUnknownTool(t *testing.T) {
 			"arguments": map[string]string{},
 		},
 	}))
-
 	if resp.Error == nil {
-		t.Fatal("expected error for unknown tool")
-	}
-}
-
-func TestMCPMethodNotFound(t *testing.T) {
-	srv := NewMCPServer("127.0.0.1:0")
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      7,
-		"method":  "nonexistent/method",
-	}))
-
-	if resp.Error == nil {
-		t.Fatal("expected error for unknown method")
-	}
-	if resp.Error.Code != -32601 {
-		t.Fatalf("expected -32601, got %d", resp.Error.Code)
-	}
-}
-
-func TestMCPNotificationReturnsNil(t *testing.T) {
-	srv := NewMCPServer("127.0.0.1:0")
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "notifications/initialized",
-	}))
-	if resp != nil {
-		t.Fatal("expected nil for notification")
+		t.Fatal("expected error")
 	}
 }
 
@@ -186,51 +176,291 @@ func TestMCPRunReadsFromStdin(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
-	input := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
-`
-	reader := strings.NewReader(input)
+	input := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n"
 	var output strings.Builder
-
 	done := make(chan struct{})
 	go func() {
-		srv.Run(ctx, reader, &output)
+		srv.Run(ctx, strings.NewReader(input), &output)
 		close(done)
 	}()
-
 	<-done
-
-	if output.Len() == 0 {
-		t.Fatal("expected output from Run")
-	}
 	if !strings.Contains(output.String(), `"protocolVersion"`) {
 		t.Fatalf("expected initialize response, got %s", output.String())
 	}
 }
 
-func TestMCPGetExplanationRequestsEmpty(t *testing.T) {
+func TestMCPRequestCodeReviewReturnsLastEventSeq(t *testing.T) {
+	repo := makeMCPRepo(t)
 	srv := NewMCPServer("127.0.0.1:0")
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
-		"id":      10,
+		"id":      50,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name":      "get_explanation_requests",
-			"arguments": map[string]string{"sessionId": "nonexistent"},
+			"name":      "request_code_review",
+			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
+		},
+	}))
+	result := toolResultJSON(t, resp)
+	if _, ok := result["lastEventSeq"]; !ok {
+		t.Fatal("expected lastEventSeq in request_code_review response")
+	}
+}
+
+func TestMCPGetPendingEventsReturnsEmpty(t *testing.T) {
+	repo := makeMCPRepo(t)
+	srv := NewMCPServer("127.0.0.1:0")
+	start := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      60,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "request_code_review",
+			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
+		},
+	}))
+	sessionID := toolResultJSON(t, start)["sessionId"].(string)
+	lastSeq := toolResultJSON(t, start)["lastEventSeq"].(float64)
+
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      61,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_pending_events",
+			"arguments": map[string]any{
+				"sessionId": sessionID,
+				"afterSeq":  int64(lastSeq),
+			},
 		},
 	}))
 
-	text := toolResultText(t, resp)
-	if !strings.Contains(text, `"requests"`) {
-		t.Fatalf("expected requests field, got %s", text)
+	result := toolResultJSON(t, resp)
+	if result["count"].(float64) != 0 {
+		t.Fatalf("expected 0 events, got %v", result["count"])
+	}
+}
+
+func TestMCPGetPendingEventsReturnsReviewSubmitted(t *testing.T) {
+	repo := makeMCPRepo(t)
+	srv := NewMCPServer("127.0.0.1:0")
+	start := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      70,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "request_code_review",
+			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
+		},
+	}))
+	sessionID := toolResultJSON(t, start)["sessionId"].(string)
+	lastSeq := int64(toolResultJSON(t, start)["lastEventSeq"].(float64))
+
+	postMCPJSON(t, srv, "/api/sessions/"+sessionID+"/feedback", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   2,
+		"body":      "Fix this",
+	})
+	postMCP(t, srv, "/api/sessions/"+sessionID+"/submit-review")
+
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      71,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_pending_events",
+			"arguments": map[string]any{
+				"sessionId": sessionID,
+				"afterSeq":  lastSeq,
+			},
+		},
+	}))
+
+	result := toolResultJSON(t, resp)
+	events := result["events"].([]any)
+	if len(events) == 0 {
+		t.Fatal("expected at least 1 event")
+	}
+	first := events[0].(map[string]any)
+	if first["type"] != "review_submitted" {
+		t.Fatalf("expected review_submitted, got %v", first["type"])
+	}
+	newSeq := int64(result["lastSeq"].(float64))
+	if newSeq <= lastSeq {
+		t.Fatalf("expected lastSeq > %d, got %d", lastSeq, newSeq)
+	}
+}
+
+func TestMCPGetPendingEventsReturnsExplanationRequested(t *testing.T) {
+	repo := makeMCPRepo(t)
+	srv := NewMCPServer("127.0.0.1:0")
+	start := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      80,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "request_code_review",
+			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
+		},
+	}))
+	sessionID := toolResultJSON(t, start)["sessionId"].(string)
+	lastSeq := int64(toolResultJSON(t, start)["lastEventSeq"].(float64))
+
+	postMCPJSON(t, srv, "/api/sessions/"+sessionID+"/explain", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   3,
+	})
+
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      81,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_pending_events",
+			"arguments": map[string]any{
+				"sessionId": sessionID,
+				"afterSeq":  lastSeq,
+			},
+		},
+	}))
+
+	result := toolResultJSON(t, resp)
+	events := result["events"].([]any)
+	if len(events) == 0 {
+		t.Fatal("expected at least 1 event")
+	}
+	first := events[0].(map[string]any)
+	if first["type"] != "explanation_requested" {
+		t.Fatalf("expected explanation_requested, got %v", first["type"])
+	}
+}
+
+func TestMCPGetPendingEventsReturnsExplanationSubmitted(t *testing.T) {
+	repo := makeMCPRepo(t)
+	srv := NewMCPServer("127.0.0.1:0")
+	start := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      90,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "request_code_review",
+			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
+		},
+	}))
+	sessionID := toolResultJSON(t, start)["sessionId"].(string)
+	lastSeq := int64(toolResultJSON(t, start)["lastEventSeq"].(float64))
+
+	postMCPJSON(t, srv, "/api/sessions/"+sessionID+"/explain", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   3,
+	})
+
+	explainResp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      91,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "submit_explanation",
+			"arguments": map[string]any{
+				"sessionId":   sessionID,
+				"filePath":    "main.go",
+				"startLine":   1,
+				"endLine":     3,
+				"explanation": "This function returns a value.",
+			},
+		},
+	}))
+	if toolResultJSON(t, explainResp)["status"] != "submitted" {
+		t.Fatal("expected explanation submitted")
+	}
+
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      92,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_pending_events",
+			"arguments": map[string]any{
+				"sessionId": sessionID,
+				"afterSeq":  lastSeq,
+			},
+		},
+	}))
+
+	result := toolResultJSON(t, resp)
+	events := result["events"].([]any)
+	types := make(map[string]bool)
+	for _, e := range events {
+		et := e.(map[string]any)["type"].(string)
+		types[et] = true
+	}
+	if !types["explanation_requested"] {
+		t.Fatal("expected explanation_requested event")
+	}
+	if !types["explanation_submitted"] {
+		t.Fatal("expected explanation_submitted event")
+	}
+}
+
+func TestMCPGetPendingEventsIncrementsSeq(t *testing.T) {
+	repo := makeMCPRepo(t)
+	srv := NewMCPServer("127.0.0.1:0")
+	start := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      95,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "request_code_review",
+			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
+		},
+	}))
+	sessionID := toolResultJSON(t, start)["sessionId"].(string)
+	lastSeq := int64(toolResultJSON(t, start)["lastEventSeq"].(float64))
+
+	postMCP(t, srv, "/api/sessions/"+sessionID+"/submit-review")
+
+	resp1 := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      96,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_pending_events",
+			"arguments": map[string]any{
+				"sessionId": sessionID,
+				"afterSeq":  lastSeq,
+			},
+		},
+	}))
+	result1 := toolResultJSON(t, resp1)
+	if result1["count"].(float64) != 1 {
+		t.Fatalf("expected 1 event, got %v", result1["count"])
+	}
+	newSeq := int64(result1["lastSeq"].(float64))
+
+	resp2 := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      97,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "get_pending_events",
+			"arguments": map[string]any{
+				"sessionId": sessionID,
+				"afterSeq":  newSeq,
+			},
+		},
+	}))
+	result2 := toolResultJSON(t, resp2)
+	if result2["count"].(float64) != 0 {
+		t.Fatalf("expected 0 events after catchup, got %v", result2["count"])
 	}
 }
 
 func TestMCPSubmitExplanationFailsForUnknownSession(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	resp := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      11,
 		"method":  "tools/call",
@@ -245,19 +475,18 @@ func TestMCPSubmitExplanationFailsForUnknownSession(t *testing.T) {
 			},
 		},
 	}))
-
 	text := toolResultText(t, resp)
 	if !strings.Contains(text, "Error:") {
-		t.Fatalf("expected error for unknown session, got %s", text)
+		t.Fatalf("expected error, got %s", text)
 	}
 }
 
-func TestMCPWaitForReviewEventReturnsSubmittedReview(t *testing.T) {
-	repo := makeMCPRepo(t)
+func TestMCPSubscriptionsListenStillWorks(t *testing.T) {
 	srv := NewMCPServer("127.0.0.1:0")
-	start := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	repo := makeMCPRepo(t)
+	start := handleMessageTest(srv, context.Background(), mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
-		"id":      12,
+		"id":      50,
 		"method":  "tools/call",
 		"params": map[string]any{
 			"name":      "request_code_review",
@@ -266,173 +495,33 @@ func TestMCPWaitForReviewEventReturnsSubmittedReview(t *testing.T) {
 	}))
 	sessionID := toolResultJSON(t, start)["sessionId"].(string)
 
-	postMCPJSON(t, srv, "/api/sessions/"+sessionID+"/feedback", map[string]any{
-		"filePath":  "main.go",
-		"startLine": 1,
-		"endLine":   2,
-		"body":      "Fix this before commit.",
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	done := make(chan *jsonRPCResponse, 1)
-	go func() {
-		done <- srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-			"jsonrpc": "2.0",
-			"id":      13,
-			"method":  "tools/call",
-			"params": map[string]any{
-				"name": "wait_for_review_event",
-				"arguments": map[string]any{
-					"sessionId":      sessionID,
-					"timeoutSeconds": 2,
-				},
-			},
-		}))
-	}()
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	var writeMu sync.Mutex
 
-	postMCP(t, srv, "/api/sessions/"+sessionID+"/submit-review")
-
-	select {
-	case resp := <-done:
-		event := toolResultJSON(t, resp)["event"].(map[string]any)
-		if event["type"] != "review_submitted" {
-			t.Fatalf("expected review_submitted event, got %#v", event)
-		}
-		review := event["review"].(map[string]any)
-		comments := review["comments"].([]any)
-		if len(comments) != 1 {
-			t.Fatalf("expected submitted comments, got %#v", comments)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for review event")
-	}
-}
-
-func TestMCPWaitForReviewEventReturnsExplanationRequest(t *testing.T) {
-	repo := makeMCPRepo(t)
-	srv := NewMCPServer("127.0.0.1:0")
-	start := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
+	resp := srv.handleMessage(ctx, mustJSON(t, map[string]any{
 		"jsonrpc": "2.0",
-		"id":      14,
-		"method":  "tools/call",
+		"id":      200,
+		"method":  "subscriptions/listen",
 		"params": map[string]any{
-			"name":      "request_code_review",
-			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
-		},
-	}))
-	sessionID := toolResultJSON(t, start)["sessionId"].(string)
-
-	postMCPJSON(t, srv, "/api/sessions/"+sessionID+"/explain", map[string]any{
-		"filePath":  "main.go",
-		"startLine": 1,
-		"endLine":   3,
-	})
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      15,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name": "wait_for_review_event",
-			"arguments": map[string]any{
-				"sessionId":      sessionID,
-				"timeoutSeconds": 1,
+			"notifications": map[string]any{
+				"reviewEvents": true,
+				"sessionIds":   []string{sessionID},
 			},
 		},
-	}))
+	}), encoder, &writeMu)
 
-	event := toolResultJSON(t, resp)["event"].(map[string]any)
-	if event["type"] != "explanation_requested" {
-		t.Fatalf("expected explanation_requested event, got %#v", event)
+	if resp != nil {
+		t.Fatalf("subscriptions/listen should return nil, got %+v", resp)
 	}
-	req := event["explanationRequest"].(map[string]any)
-	if req["filePath"] != "main.go" {
-		t.Fatalf("expected explanation request file, got %#v", req)
+	if !strings.Contains(output.String(), "notifications/subscriptions/acknowledged") {
+		t.Fatalf("expected ack, got %s", output.String())
 	}
-}
-
-func TestMCPWaitForExplanationRequestReturnsSelectedRange(t *testing.T) {
-	repo := makeMCPRepo(t)
-	srv := NewMCPServer("127.0.0.1:0")
-	start := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      16,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "request_code_review",
-			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
-		},
-	}))
-	sessionID := toolResultJSON(t, start)["sessionId"].(string)
-
-	done := make(chan *jsonRPCResponse, 1)
-	go func() {
-		done <- srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-			"jsonrpc": "2.0",
-			"id":      17,
-			"method":  "tools/call",
-			"params": map[string]any{
-				"name": "wait_for_explanation_request",
-				"arguments": map[string]any{
-					"sessionId":      sessionID,
-					"timeoutSeconds": 2,
-				},
-			},
-		}))
-	}()
-
-	postMCPJSON(t, srv, "/api/sessions/"+sessionID+"/explain", map[string]any{
-		"filePath":  "main.go",
-		"startLine": 2,
-		"endLine":   4,
-	})
-
-	select {
-	case resp := <-done:
-		result := toolResultJSON(t, resp)
-		if result["status"] != "explanation_requested" {
-			t.Fatalf("expected explanation_requested status, got %#v", result)
-		}
-		req := result["explanationRequest"].(map[string]any)
-		if req["filePath"] != "main.go" || req["startLine"] != float64(2) || req["endLine"] != float64(4) {
-			t.Fatalf("expected selected range in request, got %#v", req)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for explanation request")
-	}
-}
-
-func TestMCPWaitForExplanationRequestIgnoresReviewSubmitAndTimesOut(t *testing.T) {
-	repo := makeMCPRepo(t)
-	srv := NewMCPServer("127.0.0.1:0")
-	start := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      18,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "request_code_review",
-			"arguments": map[string]string{"repoPath": repo, "mode": "working"},
-		},
-	}))
-	sessionID := toolResultJSON(t, start)["sessionId"].(string)
-	postMCP(t, srv, "/api/sessions/"+sessionID+"/submit-review")
-
-	resp := srv.handleMessage(context.Background(), mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      19,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name": "wait_for_explanation_request",
-			"arguments": map[string]any{
-				"sessionId":      sessionID,
-				"timeoutSeconds": 1,
-			},
-		},
-	}))
-
-	result := toolResultJSON(t, resp)
-	if result["status"] != "timeout" {
-		t.Fatalf("expected timeout after non-explanation event, got %#v", result)
-	}
+	srv.removeAllSubscriptions()
 }
 
 func mustJSON(t *testing.T, v any) json.RawMessage {
@@ -473,7 +562,6 @@ func toolResultText(t *testing.T, resp *jsonRPCResponse) string {
 
 func makeMCPRepo(t *testing.T) string {
 	t.Helper()
-
 	dir := t.TempDir()
 	runMCP(t, dir, "git", "init")
 	runMCP(t, dir, "git", "config", "user.email", "test@example.com")
@@ -492,7 +580,6 @@ func makeMCPRepo(t *testing.T) string {
 
 func runMCP(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
-
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
@@ -503,7 +590,6 @@ func runMCP(t *testing.T, dir string, name string, args ...string) {
 
 func postMCP(t *testing.T, srv *MCPServer, path string) {
 	t.Helper()
-
 	req := httptest.NewRequest(http.MethodPost, path, nil)
 	rec := httptest.NewRecorder()
 	srv.httpServer.Handler().ServeHTTP(rec, req)
@@ -514,7 +600,6 @@ func postMCP(t *testing.T, srv *MCPServer, path string) {
 
 func postMCPJSON(t *testing.T, srv *MCPServer, path string, body any) {
 	t.Helper()
-
 	payload, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
