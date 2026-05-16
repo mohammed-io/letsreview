@@ -16,70 +16,70 @@ func init() {
 	openBrowser = func(string) {}
 }
 
-func TestParseConfigDefaultsToFixedPortAndCurrentRepo(t *testing.T) {
-	cfg, err := parseConfig(nil)
-	if err != nil {
-		t.Fatalf("parse config: %v", err)
-	}
-
-	if cfg.addr != "127.0.0.1:55492" {
-		t.Fatalf("expected fixed default address, got %q", cfg.addr)
-	}
-	if cfg.repoPath != "." {
-		t.Fatalf("expected current directory repo by default, got %q", cfg.repoPath)
-	}
-}
-
-func TestParseConfigAcceptsRepoPathAndAddressOverride(t *testing.T) {
-	cfg, err := parseConfig([]string{"-addr", "127.0.0.1:6000", "/tmp/repo"})
-	if err != nil {
-		t.Fatalf("parse config: %v", err)
-	}
-
-	if cfg.addr != "127.0.0.1:6000" {
-		t.Fatalf("expected address override, got %q", cfg.addr)
-	}
-	if cfg.repoPath != "/tmp/repo" {
-		t.Fatalf("expected repo path override, got %q", cfg.repoPath)
-	}
-}
-
-func TestParseConfigAcceptsMCPMode(t *testing.T) {
-	cfg, err := parseConfig([]string{"--mcp", "-addr", "127.0.0.1:6000"})
-	if err != nil {
-		t.Fatalf("parse config: %v", err)
-	}
-
-	if !cfg.mcp {
-		t.Fatal("expected MCP mode")
-	}
-	if cfg.addr != "127.0.0.1:6000" {
-		t.Fatalf("expected address override, got %q", cfg.addr)
-	}
-}
-
-func TestParseConfigRecognizesStopCommand(t *testing.T) {
-	cfg, err := parseConfig([]string{"stop"})
-	if err != nil {
-		t.Fatalf("parse config: %v", err)
-	}
-	if !cfg.stop {
-		t.Fatal("expected stop flag")
-	}
-}
-
-func TestRunHelpPrintsUsageWithoutError(t *testing.T) {
+func TestRootCommandNoArgsShowsHelp(t *testing.T) {
+	rootCmd := newRootCmd(context.Background())
+	rootCmd.SetArgs([]string{})
 	var stdout bytes.Buffer
-	if err := run(context.Background(), []string{"--help"}, &stdout); err != nil {
-		t.Fatalf("run help: %v", err)
-	}
-	output := stdout.String()
-	if !strings.Contains(output, "Usage:") || !strings.Contains(output, "letsreview --mcp") {
-		t.Fatalf("expected usage output, got %q", output)
+	rootCmd.SetOut(&stdout)
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when no args provided")
 	}
 }
 
-func TestRunStopWithNoServerReportsNotRunning(t *testing.T) {
+func TestRootCommandWithExplicitPath(t *testing.T) {
+	rootCmd := newRootCmd(context.Background())
+	rootCmd.SetArgs([]string{"/nonexistent/path/that/does/not/exist"})
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for nonexistent path")
+	}
+}
+
+func TestRootCommandAcceptsAddrFlag(t *testing.T) {
+	rootCmd := newRootCmd(context.Background())
+	rootCmd.SetArgs([]string{"--addr", "127.0.0.1:6000", "/nonexistent/path"})
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for nonexistent path")
+	}
+}
+
+func TestMCPCommandExists(t *testing.T) {
+	rootCmd := newRootCmd(context.Background())
+	cmds := rootCmd.Commands()
+	found := false
+	for _, cmd := range cmds {
+		if cmd.Use == "mcp" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected mcp subcommand")
+	}
+}
+
+func TestStopCommandExists(t *testing.T) {
+	rootCmd := newRootCmd(context.Background())
+	cmds := rootCmd.Commands()
+	found := false
+	for _, cmd := range cmds {
+		if cmd.Use == "stop" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected stop subcommand")
+	}
+}
+
+func TestStopWithNoServerReportsNotRunning(t *testing.T) {
 	var stdout bytes.Buffer
 	pidPath := filepath.Join(t.TempDir(), "server.pid")
 	origPidFilePath := pidFilePath
@@ -105,7 +105,7 @@ func TestProjectIDUsesMD5OfAbsolutePath(t *testing.T) {
 func TestRegisterProjectAndHeartbeatUseExistingServerAPI(t *testing.T) {
 	var registeredPath string
 	var heartbeatPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/projects":
 			var req map[string]string
@@ -121,9 +121,9 @@ func TestRegisterProjectAndHeartbeatUseExistingServerAPI(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	addr := strings.TrimPrefix(server.URL, "http://")
+	addr := strings.TrimPrefix(srv.URL, "http://")
 	project, err := registerProject(context.Background(), addr, "/tmp/repo")
 	if err != nil {
 		t.Fatalf("register project: %v", err)

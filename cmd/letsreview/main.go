@@ -7,10 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -23,63 +21,85 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/mohammed-io/letsreview/internal/mcp"
 	"github.com/mohammed-io/letsreview/internal/server"
 )
 
 const defaultAddr = "127.0.0.1:55492"
 
-type config struct {
-	addr     string
-	help     bool
-	mcp      bool
-	noOpen   bool
-	repoPath string
-	stop     bool
+type projectResponse struct {
+	ID       string `json:"id"`
+	RepoPath string `json:"repoPath"`
+	Repo     string `json:"repo"`
 }
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
-		log.Fatal(err)
+
+	rootCmd := newRootCmd(ctx)
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, args []string, stdout io.Writer) error {
-	cfg, err := parseConfig(args)
-	if err != nil {
-		return err
+func newRootCmd(ctx context.Context) *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "letsreview <repo>",
+		Short: "Local web UI for reviewing AI-generated code changes",
+		Long: "letsreview opens a browser UI for reviewing Git diffs, collecting line feedback,\n" +
+			"and handing that feedback back to an AI agent through MCP.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			addr, _ := cmd.Flags().GetString("addr")
+			noOpen, _ := cmd.Flags().GetBool("no-open")
+			return runServer(ctx, cmd.OutOrStdout(), addr, args[0], noOpen)
+		},
 	}
 
-	if cfg.help {
-		printUsage(stdout)
-		return nil
+	rootCmd.Flags().StringP("addr", "a", defaultAddr, "address to listen on")
+	rootCmd.Flags().Bool("no-open", false, "don't open browser automatically")
+
+	mcpCmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "Run as MCP server over stdio",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			addr, _ := cmd.Flags().GetString("addr")
+			srv := mcp.NewMCPServer(addr)
+			srv.Run(ctx, os.Stdin, cmd.OutOrStdout())
+			return nil
+		},
+	}
+	mcpCmd.Flags().StringP("addr", "a", defaultAddr, "address to listen on")
+
+	stopCmd := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the running letsreview server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return stopServer(cmd.OutOrStdout())
+		},
 	}
 
-	if cfg.stop {
-		return stopServer(stdout)
-	}
+	rootCmd.AddCommand(mcpCmd, stopCmd)
+	return rootCmd
+}
 
-	if cfg.mcp {
-		srv := mcp.NewMCPServer(cfg.addr)
-		srv.Run(ctx, os.Stdin, stdout)
-		return nil
-	}
-
-	absRepo, err := filepath.Abs(cfg.repoPath)
+func runServer(ctx context.Context, stdout io.Writer, addr string, repoPath string, noOpen bool) error {
+	absRepo, err := filepath.Abs(repoPath)
 	if err != nil {
 		return fmt.Errorf("resolve repo path: %w", err)
 	}
 
-	listener, err := net.Listen("tcp", cfg.addr)
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		project, joinErr := registerProject(ctx, cfg.addr, absRepo)
+		project, joinErr := registerProject(ctx, addr, absRepo)
 		if joinErr != nil {
-			return fmt.Errorf("listen on %s: %w; join existing server: %v", cfg.addr, err, joinErr)
+			return fmt.Errorf("listen on %s: %w; join existing server: %v", addr, err, joinErr)
 		}
-		printProject(stdout, cfg.addr, project, cfg.noOpen)
-		return heartbeatLoop(ctx, cfg.addr, project.ID)
+		printProject(stdout, addr, project, noOpen)
+		return heartbeatLoop(ctx, addr, project.ID)
 	}
 
 	app, err := server.New(absRepo)
@@ -89,23 +109,17 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 
 	pidPath := pidFilePath()
-	if err := appendPIDFile(pidPath, os.Getpid(), cfg.addr); err != nil {
+	if err := appendPIDFile(pidPath, os.Getpid(), addr); err != nil {
 		listener.Close()
 		return fmt.Errorf("write pid file: %w", err)
 	}
 
 	project := projectResponse{ID: projectID(absRepo), RepoPath: absRepo, Repo: filepath.Base(absRepo)}
-	printProject(stdout, listener.Addr().String(), project, cfg.noOpen)
+	printProject(stdout, listener.Addr().String(), project, noOpen)
 
 	err = app.ServeWithShutdown(ctx, listener)
 	removePIDEntry(pidPath, os.Getpid())
 	return err
-}
-
-type projectResponse struct {
-	ID       string `json:"id"`
-	RepoPath string `json:"repoPath"`
-	Repo     string `json:"repo"`
 }
 
 func registerProject(ctx context.Context, addr string, repoPath string) (projectResponse, error) {
@@ -193,63 +207,6 @@ var openBrowser = func(url string) {
 func projectID(absRepo string) string {
 	sum := md5.Sum([]byte(absRepo))
 	return hex.EncodeToString(sum[:])
-}
-
-func parseConfig(args []string) (config, error) {
-	flags := flag.NewFlagSet("letsreview", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	addr := flags.String("addr", defaultAddr, "address to listen on")
-	help := flags.Bool("help", false, "show help")
-	mcpMode := flags.Bool("mcp", false, "run as MCP server over stdio")
-	noOpen := flags.Bool("no-open", false, "don't open browser automatically")
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return config{help: true}, nil
-		}
-		return config{}, err
-	}
-
-	stop := false
-	repoPath := "."
-	if flags.NArg() > 0 {
-		if flags.Arg(0) == "stop" {
-			stop = true
-		} else {
-			repoPath = flags.Arg(0)
-		}
-	}
-
-	return config{addr: *addr, help: *help, mcp: *mcpMode, noOpen: *noOpen, repoPath: repoPath, stop: stop}, nil
-}
-
-func printUsage(stdout io.Writer) {
-	fmt.Fprint(stdout, `letsreview - local Git diff review UI
-
-Usage:
-  letsreview [flags] [repo]
-  letsreview stop
-  letsreview --mcp [flags]
-
-Commands:
-  stop    stop the running letsreview server
-
-Flags:
-  -addr string
-        address to listen on (default "127.0.0.1:55492")
-  -help
-        show help
-  -mcp
-        run as MCP server over stdio
-  -no-open
-        don't open browser automatically
-
-Examples:
-  letsreview .
-  letsreview ~/Projects/email-client
-  letsreview -addr 127.0.0.1:6000 .
-  letsreview stop
-  letsreview --mcp
-`)
 }
 
 var pidFilePath = defaultPIDFilePath
