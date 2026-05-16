@@ -163,6 +163,23 @@ Why:
 
 Line syntax highlighting is lightweight token coloring in browser JavaScript. It is not language-server semantic highlighting.
 
+## Keyboard Navigation
+
+In review mode (session active):
+
+- `j` / `k` — move selection down/up
+- `Shift+j` / `Shift+k` — extend selection down/up (multi-line)
+- `Tab` — toggle focus between diff and comment queue
+- `Space` — open inline review for selection
+- `i` — open inline review and focus input
+- `n` / `p` — next/previous file
+- `v` — toggle viewed status on current file
+- `f` — focus file list
+- `?` — show keyboard shortcuts
+- `Escape` — close modals / blur input
+- `Cmd+Enter` / `Ctrl+Enter` — save feedback (in input) or submit review
+- Number prefix before motion (e.g. `3j` moves 3 lines)
+
 ## Selecting Lines
 
 In canvas:
@@ -215,21 +232,21 @@ It does not include full diff, repo path, internal feedback IDs, or session data
 
 ## Submit Review
 
-`Submit review` marks review ready for agent.
+`Submit review` sends review comments to agent. Reviews are unlimited — reviewer can submit multiple times per session.
 
 Behavior:
 
 - requires at least one comment
 - asks for browser confirmation
-- stores submitted review in memory
-- UI shows submitted status
-- comments become agent-readable through MCP
+- publishes `review_submitted` event
+- each submit creates a new event; agent picks up all via `get_pending_events`
+- comments remain editable after submit; reviewer can add more and submit again
 
 API:
 
 ```txt
 POST /api/sessions/{id}/submit-review
-GET /api/sessions/{id}/review-status
+POST /api/projects/{projectID}/sessions/{id}/submit-review
 ```
 
 Submitted review includes:
@@ -310,6 +327,7 @@ MCP protocol is JSON-RPC over stdio. It implements:
 - `ping`
 - `tools/list`
 - `tools/call`
+- `subscriptions/listen` (for MCP clients that support async notifications)
 
 Protocol version:
 
@@ -324,11 +342,28 @@ name: letsreview
 version: 0.1.0
 ```
 
+Capabilities advertised in `initialize`:
+
+- `tools`
+- `subscriptions`
+
+## Event Model
+
+All review activity is tracked as events. Each event has a monotonically increasing `seq` number.
+
+Event types:
+
+- `explanation_requested` — reviewer asked for explanation on code lines
+- `explanation_submitted` — agent submitted explanation for code lines
+- `review_submitted` — reviewer submitted comments
+
+Events are stored in memory per session. Agent reads them via `get_pending_events` (non-blocking poll).
+
 ## MCP Tools
 
 ### `request_code_review`
 
-Starts HTTP server if needed, registers repo, creates review session, returns browser URL.
+Starts HTTP server if needed, registers repo, creates review session, opens browser, returns session info with event cursor.
 
 Input:
 
@@ -356,92 +391,58 @@ Output includes:
 - `projectID`
 - `files`
 - `summary`
+- `lastEventSeq`
 
-After this returns, call `wait_for_review_event` to block until the reviewer asks for explanation or submits review.
+After this returns, periodically call `get_pending_events` with `sessionId` and `lastEventSeq` to detect new events.
 
-### `wait_for_review_event`
+### `get_pending_events`
 
-Long-polls until browser UI produces an event.
+Non-blocking poll for new events. Returns immediately — never blocks. Call this periodically between user interactions.
 
 Input:
 
 ```json
 {
-  "sessionId": "...",
-  "afterSeq": 0,
-  "timeoutSeconds": 3600
-}
-```
-
-Event when reviewer asks for explanation:
-
-```json
-{
-  "status": "event",
-  "event": {
-    "seq": 1,
-    "type": "explanation_requested",
-    "sessionId": "...",
-    "explanationRequest": {
-      "filePath": "main.go",
-      "startLine": 12,
-      "endLine": 18
-    }
-  }
-}
-```
-
-Event when reviewer submits comments:
-
-```json
-{
-  "status": "event",
-  "event": {
-    "seq": 2,
-    "type": "review_submitted",
-    "sessionId": "...",
-    "review": {
-      "comments": []
-    }
-  }
-}
-```
-
-Timeout:
-
-```json
-{
-  "status": "timeout",
   "sessionId": "...",
   "afterSeq": 0
 }
 ```
 
-Use returned `seq` as next `afterSeq` to wait for the following event.
+Use `lastEventSeq` from `request_code_review` for initial `afterSeq`. Update `afterSeq` to the latest `seq` from returned events on each call.
 
-### `check_review_status`
-
-Input:
+Output:
 
 ```json
 {
-  "sessionId": "..."
+  "sessionId": "...",
+  "events": [
+    {
+      "seq": 1,
+      "type": "explanation_requested",
+      "sessionId": "...",
+      "explanationRequest": {
+        "id": "...",
+        "filePath": "main.go",
+        "startLine": 12,
+        "endLine": 18
+      }
+    }
+  ],
+  "count": 1,
+  "lastSeq": 1
 }
 ```
 
-Returns:
+Event types in `events` array:
 
-```json
-{
-  "status": "pending",
-  "sessionId": "..."
-}
-```
-
-Status becomes `submitted` after human clicks `Submit review`.
+- `explanation_requested` — reviewer wants explanation (has `explanationRequest` field)
+- `explanation_submitted` — agent submitted explanation (has `explanation` field)
+- `review_submitted` — reviewer submitted comments (has `review` field with comments array)
 
 ### `get_review_result`
 
+Returns the latest submitted review for a session. Call after `get_pending_events` returns a `review_submitted` event.
+
 Input:
 
 ```json
@@ -450,7 +451,7 @@ Input:
 }
 ```
 
-Returns submitted review. If not submitted yet, returns tool error text.
+Returns submitted review or error if no review submitted yet. Multiple reviews can be submitted per session; this returns the most recent.
 
 ### `cancel_review`
 
@@ -464,63 +465,9 @@ Input:
 
 Current behavior returns cancelled status. It does not remove server state.
 
-### `get_explanation_requests`
-
-Input:
-
-```json
-{
-  "sessionId": "..."
-}
-```
-
-Returns pending/resolved explanation requests created by browser UI.
-
-### `wait_for_explanation_request`
-
-Long-polls until reviewer asks for explanation.
-
-Input:
-
-```json
-{
-  "sessionId": "...",
-  "afterSeq": 0,
-  "timeoutSeconds": 3600
-}
-```
-
-Returns:
-
-```json
-{
-  "status": "explanation_requested",
-  "seq": 3,
-  "sessionId": "...",
-  "projectID": "...",
-  "explanationRequest": {
-    "id": "...",
-    "filePath": "main.go",
-    "startLine": 12,
-    "endLine": 18,
-    "resolved": false
-  }
-}
-```
-
-If no explanation request arrives before timeout:
-
-```json
-{
-  "status": "timeout",
-  "sessionId": "...",
-  "afterSeq": 3
-}
-```
-
-Use this when agent should pause until human clicks `Explain selection`.
-
 ### `submit_explanation`
+
+Submit an explanation for specific code lines. Call when `get_pending_events` returns an `explanation_requested` event.
 
 Input:
 
@@ -534,7 +481,17 @@ Input:
 }
 ```
 
-Stores explanation for browser UI.
+Creates `explanation_submitted` event. Explanation appears inline in reviewer's browser.
+
+## Agent Flow
+
+Recommended agent flow:
+
+1. Call `request_code_review` → get `sessionId` + `lastEventSeq`
+2. Periodically call `get_pending_events` with `sessionId` + `afterSeq`
+3. On `explanation_requested` → call `submit_explanation`
+4. On `review_submitted` → call `get_review_result` to get comments
+5. Update `afterSeq` from `lastSeq` after each poll
 
 ## HTTP API Summary
 
@@ -552,7 +509,6 @@ POST   /api/sessions/{id}/feedback
 DELETE /api/sessions/{id}/feedback/{feedbackID}
 GET    /api/sessions/{id}/agent-payload
 POST   /api/sessions/{id}/submit-review
-GET    /api/sessions/{id}/review-status
 POST   /api/sessions/{id}/explanations
 GET    /api/sessions/{id}/explanations
 GET    /api/sessions/{id}/explanation-requests
@@ -573,7 +529,6 @@ POST   /api/projects/{projectID}/sessions/{id}/feedback
 DELETE /api/projects/{projectID}/sessions/{id}/feedback/{feedbackID}
 GET    /api/projects/{projectID}/sessions/{id}/agent-payload
 POST   /api/projects/{projectID}/sessions/{id}/submit-review
-GET    /api/projects/{projectID}/sessions/{id}/review-status
 POST   /api/projects/{projectID}/sessions/{id}/explanations
 GET    /api/projects/{projectID}/sessions/{id}/explanations
 GET    /api/projects/{projectID}/sessions/{id}/explanation-requests
@@ -595,7 +550,7 @@ Server state is in memory:
 - projects
 - sessions
 - comments
-- submitted reviews
+- review events (explanation_requested, explanation_submitted, review_submitted)
 - explanations
 - explanation requests
 
@@ -638,6 +593,25 @@ WEB_UI_ROOT=/path/to/web/root ./letsreview /path/to/repo
 - binds localhost unless configured otherwise
 
 Agent behavior happens outside this binary. MCP only passes review requests/results.
+
+## PID File
+
+Server PID file location:
+
+```txt
+~/.local/share/letsreview/server.pid
+```
+
+Format: one entry per line (`<pid> <addr>`).
+
+```txt
+12345 127.0.0.1:55492
+12346 127.0.0.1:55492
+```
+
+Each `letsreview` server process appends its PID on start. On exit, it removes its own entry. If the file becomes empty, it is deleted.
+
+`letsreview stop` reads all entries, kills live processes, removes stale entries.
 
 ## Troubleshooting
 
