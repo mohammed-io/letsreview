@@ -33,13 +33,11 @@ You are working on `letsreview`: Go CLI + local web UI + MCP server for human-in
 GOCACHE=/private/tmp/letsreview-gocache go test ./...
 GOCACHE=/private/tmp/letsreview-gocache go vet ./...
 GOCACHE=/private/tmp/letsreview-gocache go build ./cmd/letsreview
-GOCACHE=/private/tmp/letsreview-gocache go build ./cmd/mcp
 ```
 
 ## Architecture
 
 - `cmd/letsreview`: user CLI, starts/join local web server, and `mcp` subcommand for stdio server mode.
-- `cmd/mcp`: legacy/compat stdio MCP entrypoint.
 - `internal/gitdiff`: Git diff command + unified diff parser.
 - `internal/server`: HTTP API, in-memory projects/sessions/comments/explanations.
 - `internal/server/web`: embedded browser UI.
@@ -50,9 +48,7 @@ GOCACHE=/private/tmp/letsreview-gocache go build ./cmd/mcp
 - `letsreview <repo>` requires an explicit repo path. No args shows help.
 - First CLI process owns HTTP server.
 - Later CLI processes register extra repos with same server and heartbeat.
-- UI has Live mode and Sessions mode.
-- Live mode polls working tree diff.
-- Sessions mode creates snapshot reviews: `working`, `staged`, or `refs`.
+- UI shows live working tree diff, polling every 2s.
 - Feedback/comments are in memory with resolved status. Browser-only state uses `sessionStorage`.
 - Submit review sends only unresolved comments to MCP agent.
 - Agent resolves each comment after applying the fix via `resolve_feedback`.
