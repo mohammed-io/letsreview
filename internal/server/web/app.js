@@ -1,6 +1,5 @@
 const state = {
   projectID: new URLSearchParams(window.location.search).get("project"),
-  mode: "live",
   sessions: [],
   activeSession: null,
   activeFile: null,
@@ -22,16 +21,6 @@ const state = {
 
 const els = {
   repo: document.querySelector("#repo-label"),
-  modeLive: document.querySelector("#mode-live"),
-  modeSessions: document.querySelector("#mode-sessions"),
-  comparisonPanel: document.querySelector("#comparison-panel"),
-  sessionsPanel: document.querySelector("#sessions-panel"),
-  mode: document.querySelector("#mode"),
-  refs: document.querySelector("#refs"),
-  baseRef: document.querySelector("#base-ref"),
-  headRef: document.querySelector("#head-ref"),
-  create: document.querySelector("#create-session"),
-  sessions: document.querySelector("#sessions"),
   title: document.querySelector("#session-title"),
   summary: document.querySelector("#session-summary"),
   statFiles: document.querySelector("#stat-files"),
@@ -290,7 +279,7 @@ function totalCommentCount() {
 }
 
 function allFiles() {
-  return state.mode === "live" ? (state.liveData?.files || []) : (state.activeSession?.files || []);
+  return state.liveData?.files || [];
 }
 
 function draftCount() {
@@ -503,13 +492,24 @@ function toggleFocusZone() {
 }
 
 function renderAll() {
-  if (state.mode === "live") {
-    renderLive();
-  } else {
-    renderSessions();
-    renderHeader();
-    renderFiles();
-  }
+  const data = state.liveData;
+  els.title.textContent = data ? "Live: Working Tree" : "Loading...";
+  if (els.summary) els.summary.textContent = data ? data.summary : "Fetching diff...";
+  els.statFiles.textContent = `${data?.stats?.files || 0} files`;
+  els.statAdd.textContent = `+${data?.stats?.additions || 0}`;
+  els.statDel.textContent = `-${data?.stats?.deletions || 0}`;
+  els.repo.textContent = data?.meta?.repo || "local repo";
+
+  const files = data?.files || [];
+  els.files.replaceChildren(...files.map((file) => {
+    const button = document.createElement("button");
+    button.className = `file ${state.activeFile?.path === file.path ? "active" : ""} ${isFileViewed(file) ? "viewed" : ""}`;
+    const icon = file.status === "added" ? "A" : file.status === "deleted" ? "D" : file.status === "renamed" ? "R" : "M";
+    const comments = commentCountForFile(file.path);
+    button.innerHTML = `<span class="file-status">${isFileViewed(file) ? "✓" : icon}</span><strong>${escapeHtml(file.path)}${comments ? ` <em>(${comments})</em>` : ""}</strong><small>+${file.additions} -${file.deletions}</small>`;
+    button.addEventListener("click", () => setActiveFile(file));
+    return button;
+  }));
   const codeLines = state.activeFile && !isFileViewed(state.activeFile) ? flatten(state.activeFile) : [];
   state.flatLines = codeLines.length
     ? [...codeLines, ...Array.from({ length: canvasBottomPadding }, () => ({ kind: "padding" }))]
@@ -607,12 +607,14 @@ function commentNodes(comments, options = {}) {
     ` : `
       <div class="comment-meta">
         <strong>${escapeHtml(range)}</strong>
-        ${resolvedBadge}
-        <button class="delete-comment icon-delete" data-feedback-id="${escapeHtml(comment.id)}" aria-label="Delete comment">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-          </svg>
-        </button>
+        <div class="comment-meta-actions">
+          ${resolvedBadge}
+          <button class="delete-comment icon-delete" data-feedback-id="${escapeHtml(comment.id)}" aria-label="Delete comment">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+            </svg>
+          </button>
+        </div>
       </div>
       <p>${escapeHtml(comment.body)}</p>
     `;
@@ -670,7 +672,7 @@ async function saveFeedback() {
 
 async function submitReview() {
   if (!state.activeSession || totalCommentCount() === 0) return;
-  if (!window.alert("Submit this review? The agent will receive all comments and may start making changes.")) return;
+  if (!window.confirm("Submit this review? The agent will receive all comments and may start making changes.")) return;
   await api(`/api/sessions/${state.activeSession.id}/submit-review`, { method: "POST" });
   renderAll();
 }
@@ -719,59 +721,6 @@ function openInlineReviewForSelection(options = {}) {
   if (options.focusInput) els.feedback.focus();
 }
 
-function renderLive() {
-  const data = state.liveData;
-  els.title.textContent = data ? "Live: Working Tree" : "Loading...";
-  if (els.summary) els.summary.textContent = data ? data.summary : "Fetching diff...";
-  els.statFiles.textContent = `${data?.stats?.files || 0} files`;
-  els.statAdd.textContent = `+${data?.stats?.additions || 0}`;
-  els.statDel.textContent = `-${data?.stats?.deletions || 0}`;
-  els.repo.textContent = data?.meta?.repo || "local repo";
-
-  const files = data?.files || [];
-  els.files.replaceChildren(...files.map((file) => {
-    const button = document.createElement("button");
-    button.className = `file ${state.activeFile?.path === file.path ? "active" : ""} ${isFileViewed(file) ? "viewed" : ""}`;
-    const icon = file.status === "added" ? "A" : file.status === "deleted" ? "D" : file.status === "renamed" ? "R" : "M";
-    const comments = commentCountForFile(file.path);
-    button.innerHTML = `<span class="file-status">${isFileViewed(file) ? "✓" : icon}</span><strong>${escapeHtml(file.path)}${comments ? ` <em>(${comments})</em>` : ""}</strong><small>+${file.additions} -${file.deletions}</small>`;
-    button.addEventListener("click", () => setActiveFile(file));
-    return button;
-  }));
-}
-
-function renderSessions() {
-  els.sessions.replaceChildren(...state.sessions.map((session) => {
-    const button = document.createElement("button");
-    button.className = `session ${state.activeSession?.id === session.id ? "active" : ""}`;
-    button.innerHTML = `<strong>${escapeHtml(session.title)}</strong><small>${session.stats.files} files · +${session.stats.additions} -${session.stats.deletions}</small>`;
-    button.addEventListener("click", () => selectSession(session));
-    return button;
-  }));
-}
-
-function renderHeader() {
-  const session = state.activeSession;
-  els.title.textContent = session ? session.title : "No review loaded";
-  if (els.summary) els.summary.textContent = session ? session.summary : "Create a review to inspect diffs.";
-  els.statFiles.textContent = `${session?.stats.files || 0} files`;
-  els.statAdd.textContent = `+${session?.stats.additions || 0}`;
-  els.statDel.textContent = `-${session?.stats.deletions || 0}`;
-  els.repo.textContent = session?.meta.repo || "local repo";
-}
-
-function renderFiles() {
-  const files = state.activeSession?.files || [];
-  els.files.replaceChildren(...files.map((file) => {
-    const button = document.createElement("button");
-    button.className = `file ${state.activeFile?.path === file.path ? "active" : ""} ${isFileViewed(file) ? "viewed" : ""}`;
-    const comments = commentCountForFile(file.path);
-    button.innerHTML = `<span class="file-status">${isFileViewed(file) ? "✓" : escapeHtml(file.status.slice(0, 1).toUpperCase())}</span><strong>${escapeHtml(file.path)}${comments ? ` <em>(${comments})</em>` : ""}</strong><small>+${file.additions} -${file.deletions}</small>`;
-    button.addEventListener("click", () => selectFile(file));
-    return button;
-  }));
-}
-
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 }
@@ -783,10 +732,6 @@ async function refreshSessions() {
   } else if (state.sessions[0]) {
     const storedSessionID = readStoredState().activeSessionID;
     const restored = state.sessions.find((session) => session.id === storedSessionID) || state.sessions[0];
-    if (state.mode === "sessions") {
-      selectSession(restored);
-      return;
-    }
     state.activeSession = restored;
   }
   await fetchExplanations();
@@ -835,27 +780,6 @@ async function fetchLiveDiff() {
   }
 }
 
-function setMode(mode) {
-  state.mode = mode;
-  els.modeLive.classList.toggle("active", mode === "live");
-  els.modeSessions.classList.toggle("active", mode === "sessions");
-  els.comparisonPanel.style.display = mode === "sessions" ? "grid" : "none";
-  els.sessionsPanel.style.display = mode === "sessions" ? "flex" : "none";
-
-  if (mode === "live") {
-    refreshSessions();
-    fetchLiveDiff();
-    state.pollInterval = setInterval(fetchLiveDiff, 2000);
-  } else {
-    if (state.pollInterval) clearInterval(state.pollInterval);
-    refreshSessions();
-    state.pollInterval = setInterval(refreshSessions, 2000);
-  }
-}
-
-els.modeLive.addEventListener("click", () => setMode("live"));
-els.modeSessions.addEventListener("click", () => setMode("sessions"));
-
 els.viewedFile.addEventListener("change", () => {
   if (!state.activeFile) return;
   const key = fileViewedKey(state.activeFile);
@@ -868,17 +792,6 @@ els.viewedFile.addEventListener("change", () => {
   }
   scrollY = 0;
   renderAll();
-});
-
-els.mode.addEventListener("change", () => {
-  els.refs.classList.toggle("visible", els.mode.value === "refs");
-});
-
-els.create.addEventListener("click", async () => {
-  const body = { mode: els.mode.value, baseRef: els.baseRef.value, headRef: els.headRef.value };
-  const session = await api("/api/sessions", { method: "POST", body: JSON.stringify(body) });
-  state.sessions = [session, ...state.sessions.filter((item) => item.id !== session.id)];
-  selectSession(session);
 });
 
 function scrollDiffBy(deltaY) {
@@ -1198,7 +1111,11 @@ function registerReviewKeyboardNavigation() {
 registerReviewKeyboardNavigation();
 
 window.addEventListener("resize", resizeCanvas);
-setMode("live");
+refreshSessions();
+fetchLiveDiff();
+state.pollInterval = setInterval(async () => {
+  await Promise.all([fetchLiveDiff(), refreshSessions()]);
+}, 2000);
 resizeCanvas();
 
 {

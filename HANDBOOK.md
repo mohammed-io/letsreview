@@ -6,8 +6,8 @@
 
 There are two binaries:
 
-- `letsreview`: CLI + local HTTP server + embedded web UI.
-- `letsreview --mcp`: same binary in stdio MCP server mode for agents.
+- `letsreview`: CLI + local HTTP server + embedded web UI. Subcommands: `mcp`, `stop`.
+- `letsreview mcp`: same binary in stdio MCP server mode for agents.
 
 There are two review surfaces:
 
@@ -36,12 +36,6 @@ GOCACHE=/private/tmp/letsreview-gocache go build -o letsreview ./cmd/letsreview
 ./letsreview /path/to/git/repo
 ```
 
-If no repo path is supplied, `.` is used:
-
-```sh
-./letsreview
-```
-
 Default address:
 
 ```txt
@@ -55,13 +49,15 @@ letsreview is running at http://127.0.0.1:55492?project=89a35363ec8de7131a16c2ed
 reviewing /path/to/git/repo
 ```
 
-Open URL in browser.
+Open URL in browser. Running without arguments shows help.
 
 ## CLI Flags
 
 ```sh
-letsreview [flags] [repo]
+letsreview <repo>
 ```
+
+A repo path is required. No default is assumed.
 
 Available flags:
 
@@ -69,8 +65,8 @@ Available flags:
 -addr string
     Address to listen on. Default: 127.0.0.1:55492
 
--open
-    Prints browser-open hint only. It does not launch browser.
+-no-open
+    Don't open browser automatically.
 ```
 
 Examples:
@@ -78,7 +74,7 @@ Examples:
 ```sh
 ./letsreview ~/Projects/email-client
 ./letsreview -addr 127.0.0.1:6000 ~/Projects/email-client
-./letsreview -open .
+./letsreview -no-open .
 ```
 
 ## Multiple Repos
@@ -201,44 +197,50 @@ Comment behavior:
 - `Cmd+Enter` on macOS saves
 - `Ctrl+Enter` elsewhere saves
 - comments can be deleted
+- comments can be resolved by AI agent (marked with green badge, dimmed)
 - file comment count appears beside filename
 - `Comments` button opens file comment modal
 
 API:
 
 ```txt
-POST /api/sessions/{id}/feedback
+POST   /api/sessions/{id}/feedback
 DELETE /api/sessions/{id}/feedback/{feedbackID}
-GET /api/sessions/{id}/agent-payload
+PATCH  /api/sessions/{id}/feedback/{feedbackID}/resolve
+GET    /api/sessions/{id}/agent-payload
 ```
 
-Agent payload is intentionally compact:
+Agent payload includes comment ID and resolved status:
 
 ```json
 {
   "comments": [
     {
+      "id": "abc123",
       "filePath": "main.go",
       "startLine": 1,
       "endLine": 2,
       "body": "Rename this for clarity.",
-      "createdAt": "2026-05-15T..."
+      "createdAt": "2026-05-15T...",
+      "resolved": false,
+      "resolvedAt": null
     }
   ]
 }
 ```
 
-It does not include full diff, repo path, internal feedback IDs, or session data.
+The `id` field lets agents call `resolve_feedback` after processing each comment.
 
 ## Submit Review
 
-`Submit review` sends review comments to agent. Reviews are unlimited — reviewer can submit multiple times per session.
+`Submit review` sends unresolved review comments to agent. Reviews are unlimited — reviewer can submit multiple times per session.
 
 Behavior:
 
-- requires at least one comment
+- requires at least one unresolved comment
 - asks for browser confirmation
 - publishes `review_submitted` event
+- only unresolved comments are included (resolved comments are excluded)
 - each submit creates a new event; agent picks up all via `get_pending_events`
 - comments remain editable after submit; reviewer can add more and submit again
 
@@ -306,7 +308,7 @@ This creates human-to-agent loop:
 Start MCP server:
 
 ```sh
-./letsreview --mcp
+./letsreview mcp
 ```
 
 Default HTTP address:
@@ -318,7 +320,7 @@ Default HTTP address:
 Override:
 
 ```sh
-./letsreview --mcp -addr 127.0.0.1:6000
+./letsreview mcp -addr 127.0.0.1:6000
 ```
 
 MCP protocol is JSON-RPC over stdio. It implements:
@@ -465,6 +467,21 @@ Input:
 
 Current behavior returns cancelled status. It does not remove server state.
 
+### `resolve_feedback`
+
+Mark a feedback comment as resolved after the AI agent has applied the requested change. The comment remains visible in the web UI with a resolved indicator (green badge, dimmed). Submit review only sends unresolved comments.
+
+Input:
+
+```json
+{
+  "sessionId": "...",
+  "commentId": "abc123"
+}
+```
+
+Returns `resolved` status. Returns error if session or comment not found.
+
 ### `submit_explanation`
 
 Submit an explanation for specific code lines. Call when `get_pending_events` returns an `explanation_requested` event.
@@ -491,7 +508,8 @@ Recommended agent flow:
 2. Periodically call `get_pending_events` with `sessionId` + `afterSeq`
 3. On `explanation_requested` → call `submit_explanation`
 4. On `review_submitted` → call `get_review_result` to get comments
-5. Update `afterSeq` from `lastSeq` after each poll
+5. Apply each comment as a code change, then call `resolve_feedback` with the comment `id`
+6. Update `afterSeq` from `lastSeq` after each poll
 
 ## HTTP API Summary
 
@@ -507,6 +525,7 @@ DELETE /api/sessions/{id}
 POST   /api/sessions/{id}/explain
 POST   /api/sessions/{id}/feedback
 DELETE /api/sessions/{id}/feedback/{feedbackID}
+PATCH  /api/sessions/{id}/feedback/{feedbackID}/resolve
 GET    /api/sessions/{id}/agent-payload
 POST   /api/sessions/{id}/submit-review
 POST   /api/sessions/{id}/explanations
@@ -527,6 +546,7 @@ DELETE /api/projects/{projectID}/sessions/{id}
 POST   /api/projects/{projectID}/sessions/{id}/explain
 POST   /api/projects/{projectID}/sessions/{id}/feedback
 DELETE /api/projects/{projectID}/sessions/{id}/feedback/{feedbackID}
+PATCH  /api/projects/{projectID}/sessions/{id}/feedback/{feedbackID}/resolve
 GET    /api/projects/{projectID}/sessions/{id}/agent-payload
 POST   /api/projects/{projectID}/sessions/{id}/submit-review
 POST   /api/projects/{projectID}/sessions/{id}/explanations
@@ -549,7 +569,7 @@ Server state is in memory:
 
 - projects
 - sessions
-- comments
+- comments (with resolved status)
 - review events (explanation_requested, explanation_submitted, review_submitted)
 - explanations
 - explanation requests
@@ -650,7 +670,7 @@ Expected for now. Server state is in memory.
 Make sure address matches:
 
 ```sh
-./letsreview --mcp -addr 127.0.0.1:55492
+./letsreview mcp -addr 127.0.0.1:55492
 ```
 
 If MCP starts HTTP server itself, it uses same address value.

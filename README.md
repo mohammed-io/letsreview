@@ -64,7 +64,7 @@ You can submit multiple reviews per session. Each one creates a new event the ag
 ## CLI
 
 ```sh
-letsreview [flags] [repo]
+letsreview <repo>
 ```
 
 ```
@@ -72,7 +72,7 @@ letsreview [flags] [repo]
 -no-open       don't open browser automatically
 ```
 
-`repo` defaults to `.` (current directory).
+A repo path is required. Running without arguments shows help.
 
 ### Multiple repos in one server
 
@@ -94,14 +94,15 @@ The first `letsreview` process starts the server. If you run another one with th
 Run the MCP server:
 
 ```sh
-letsreview --mcp
+letsreview mcp
 ```
 
 | Tool | What it does |
 |------|-------------|
 | `request_code_review` | Creates session, opens browser, returns `sessionId` + `lastEventSeq` |
 | `get_pending_events` | Non-blocking poll for new events since last `seq` |
-| `get_review_result` | Returns latest submitted review with all comments |
+| `get_review_result` | Returns latest submitted review with unresolved comments |
+| `resolve_feedback` | Marks a comment as resolved after agent applies the change |
 | `submit_explanation` | Responds to an explanation request from the reviewer |
 | `cancel_review` | Cancels a review session |
 
@@ -126,7 +127,7 @@ Project-level `.mcp.json` or global `~/.claude/mcp.json`:
   "mcpServers": {
     "letsreview": {
       "command": "letsreview",
-      "args": ["--mcp"]
+      "args": ["mcp"]
     }
   }
 }
@@ -141,7 +142,7 @@ Project-level `.mcp.json` or global `~/.claude/mcp.json`:
   "mcpServers": {
     "letsreview": {
       "command": "letsreview",
-      "args": ["--mcp"]
+      "args": ["mcp"]
     }
   }
 }
@@ -156,7 +157,7 @@ Project-level `opencode.json`:
   "mcp": {
     "letsreview": {
       "command": "letsreview",
-      "args": ["--mcp"]
+      "args": ["mcp"]
     }
   }
 }

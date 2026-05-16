@@ -105,39 +105,8 @@ button.danger:hover {
 }
 
 button.secondary:hover,
-.mode-btn:hover,
-.session:hover,
 .file:hover {
   background: var(--panel-3);
-}
-
-.mode-toggle {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.mode-btn {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--muted);
-  border-color: var(--line);
-  font-size: 13px;
-  padding: 7px 10px;
-}
-
-.mode-btn + .mode-btn {
-  border-left: 1px solid var(--line);
-}
-
-.mode-btn.active {
-  background: var(--panel-2);
-  color: var(--text-strong);
-  box-shadow: inset 0 -2px 0 var(--blue);
 }
 
 .shell {
@@ -207,17 +176,7 @@ p {
   flex: 1;
 }
 
-.comparison {
-  display: none;
-  align-items: end;
-  gap: 8px;
-}
 
-.sessions-popover {
-  display: none;
-  min-width: 220px;
-  max-width: 320px;
-}
 
 .panel-title {
   color: var(--muted);
@@ -260,8 +219,6 @@ textarea {
 
 .refs {
   display: none;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
 }
 
 .refs.visible {
@@ -276,7 +233,6 @@ textarea {
   overflow: auto;
 }
 
-.session,
 .file {
   border: 1px solid transparent;
   border-radius: 6px;
@@ -286,7 +242,6 @@ textarea {
   text-align: left;
 }
 
-.session.active,
 .file.active {
   border-color: rgba(88, 166, 255, 0.35);
   background: rgba(56, 139, 253, 0.12);
@@ -391,8 +346,7 @@ textarea {
   color: var(--muted);
 }
 
-.file strong,
-.session strong {
+.file strong {
   display: block;
   overflow: hidden;
   color: var(--text);
@@ -410,14 +364,6 @@ textarea {
 
 .file small {
   display: block;
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-
-.session small {
-  display: block;
-  margin-top: 4px;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
@@ -591,6 +537,12 @@ textarea {
   margin-top: 2px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.comment-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .comment-item p {

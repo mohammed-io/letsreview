@@ -20,34 +20,7 @@
           <div class="review-title">
             <h2 id="session-title">No review loaded</h2>
           </div>
-          <div class="mode-toggle">
-            <button id="mode-live" class="mode-btn active">Live</button>
-            <button id="mode-sessions" class="mode-btn">Sessions</button>
-          </div>
-          <section class="comparison" id="comparison-panel">
-            <label>
-              Diff Type
-              <select id="mode">
-                <option value="working">Working tree vs HEAD</option>
-                <option value="staged">Staged changes</option>
-                <option value="refs">Two refs</option>
-              </select>
-            </label>
-            <div class="refs" id="refs">
-              <label>
-                Base
-                <input id="base-ref" placeholder="main">
-              </label>
-              <label>
-                Head
-                <input id="head-ref" placeholder="feature-branch">
-              </label>
-            </div>
-            <button id="create-session">Create review</button>
-          </section>
-          <section class="sessions-popover" id="sessions-panel">
-            <div id="sessions" class="sessions"></div>
-          </section>
+
           <div class="topbar-actions">
             <div class="stats">
               <span id="stat-files">0 files</span>
