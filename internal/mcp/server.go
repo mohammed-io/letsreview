@@ -213,7 +213,7 @@ func (m *MCPServer) handleToolsList(req jsonRPCRequest) *jsonRPCResponse {
 				},
 				{
 					"name":        "get_review_result",
-					"description": "Get the latest submitted review result with all comments. Call after get_pending_events returns a review_submitted event. Returns the most recent review for the session. Multiple reviews can be submitted per session.",
+					"description": "Get the latest submitted review result with all comments. Call after get_pending_events returns a review_submitted event. Returns the most recent review for the session. Multiple reviews can be submitted per session. Each comment includes an `id` field — after applying a comment's change, call `resolve_feedback` with that id to mark it resolved.",
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -231,6 +231,18 @@ func (m *MCPServer) handleToolsList(req jsonRPCRequest) *jsonRPCResponse {
 							"sessionId": map[string]any{"type": "string", "description": "Session ID to cancel"},
 						},
 						"required": []string{"sessionId"},
+					},
+				},
+				{
+					"name":        "resolve_feedback",
+					"description": "Mark a feedback comment as resolved after the AI agent has applied the requested change. The comment remains visible in the web UI with a resolved indicator. Submit review only sends unresolved comments.",
+					"inputSchema": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"sessionId":  map[string]any{"type": "string", "description": "Session ID"},
+							"commentId":  map[string]any{"type": "string", "description": "The ID of the comment/feedback to resolve. Use the id field from the comment object."},
+						},
+						"required": []string{"sessionId", "commentId"},
 					},
 				},
 				{
@@ -274,6 +286,8 @@ func (m *MCPServer) handleToolsCall(ctx context.Context, req jsonRPCRequest) *js
 		result, err = m.toolGetReviewResult(params.Arguments)
 	case "cancel_review":
 		result, err = m.toolCancelReview(params.Arguments)
+	case "resolve_feedback":
+		result, err = m.toolResolveFeedback(params.Arguments)
 	case "submit_explanation":
 		result, err = m.toolSubmitExplanation(params.Arguments)
 	default:
@@ -706,6 +720,27 @@ func (m *MCPServer) toolCancelReview(raw json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	return map[string]string{"status": "cancelled", "sessionId": args.SessionID}, nil
+}
+
+func (m *MCPServer) toolResolveFeedback(raw json.RawMessage) (any, error) {
+	var args struct {
+		SessionID string `json:"sessionId"`
+		CommentID string `json:"commentId"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	projectID := m.store.FindProjectForSession(args.SessionID)
+	if projectID == "" {
+		return nil, fmt.Errorf("session %s not found", args.SessionID)
+	}
+
+	if !m.store.ResolveFeedback(projectID, args.SessionID, args.CommentID) {
+		return nil, fmt.Errorf("comment %s not found in session %s", args.CommentID, args.SessionID)
+	}
+
+	return map[string]string{"status": "resolved", "sessionId": args.SessionID, "commentId": args.CommentID}, nil
 }
 
 func (m *MCPServer) toolSubmitExplanation(raw json.RawMessage) (any, error) {

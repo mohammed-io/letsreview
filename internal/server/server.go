@@ -66,13 +66,15 @@ type Session struct {
 }
 
 type Feedback struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"sessionId"`
-	FilePath  string    `json:"filePath"`
-	StartLine int       `json:"startLine"`
-	EndLine   int       `json:"endLine"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID         string     `json:"id"`
+	SessionID  string     `json:"sessionId"`
+	FilePath   string     `json:"filePath"`
+	StartLine  int        `json:"startLine"`
+	EndLine    int        `json:"endLine"`
+	Body       string     `json:"body"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	Resolved   bool       `json:"resolved"`
+	ResolvedAt *time.Time `json:"resolvedAt,omitempty"`
 }
 
 type SubmittedReview struct {
@@ -85,11 +87,14 @@ type SubmittedReview struct {
 }
 
 type AgentComment struct {
-	FilePath  string    `json:"filePath"`
-	StartLine int       `json:"startLine"`
-	EndLine   int       `json:"endLine"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID         string     `json:"id"`
+	FilePath   string     `json:"filePath"`
+	StartLine  int        `json:"startLine"`
+	EndLine    int        `json:"endLine"`
+	Body       string     `json:"body"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	Resolved   bool       `json:"resolved"`
+	ResolvedAt *time.Time `json:"resolvedAt,omitempty"`
 }
 
 type Explanation struct {
@@ -277,6 +282,28 @@ func (s *Store) FindProjectForSession(sessionID string) string {
 	return ""
 }
 
+func (s *Store) ResolveFeedback(projectID, sessionID, feedbackID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	project := s.Projects[projectID]
+	if project == nil {
+		return false
+	}
+
+	feedback := project.Feedback[sessionID]
+	for i := range feedback {
+		if feedback[i].ID == feedbackID {
+			feedback[i].Resolved = true
+			now := time.Now().UTC()
+			feedback[i].ResolvedAt = &now
+			project.Feedback[sessionID] = feedback
+			return true
+		}
+	}
+	return false
+}
+
 func New(repoPath string) (*Server, error) {
 	static, err := webStaticFS()
 	if err != nil {
@@ -361,6 +388,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/projects/{projectID}/sessions/{id}/explain", s.projectExplain)
 	s.mux.HandleFunc("POST /api/projects/{projectID}/sessions/{id}/feedback", s.projectAddFeedback)
 	s.mux.HandleFunc("DELETE /api/projects/{projectID}/sessions/{id}/feedback/{feedbackID}", s.projectDeleteFeedback)
+	s.mux.HandleFunc("PATCH /api/projects/{projectID}/sessions/{id}/feedback/{feedbackID}/resolve", s.projectResolveFeedback)
 	s.mux.HandleFunc("GET /api/projects/{projectID}/sessions/{id}/agent-payload", s.projectAgentPayload)
 	s.mux.HandleFunc("POST /api/projects/{projectID}/sessions/{id}/submit-review", s.projectSubmitReview)
 	s.mux.HandleFunc("POST /api/projects/{projectID}/sessions/{id}/explanations", s.projectAddExplanation)
@@ -375,6 +403,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/explain", s.explain)
 	s.mux.HandleFunc("POST /api/sessions/{id}/feedback", s.addFeedback)
 	s.mux.HandleFunc("DELETE /api/sessions/{id}/feedback/{feedbackID}", s.deleteFeedback)
+	s.mux.HandleFunc("PATCH /api/sessions/{id}/feedback/{feedbackID}/resolve", s.resolveFeedback)
 	s.mux.HandleFunc("GET /api/sessions/{id}/agent-payload", s.agentPayload)
 	s.mux.HandleFunc("POST /api/sessions/{id}/submit-review", s.submitReview)
 	s.mux.HandleFunc("POST /api/sessions/{id}/explanations", s.addExplanation)
@@ -663,6 +692,46 @@ func (s *Server) projectAddFeedback(w http.ResponseWriter, r *http.Request) {
 	s.addFeedbackFor(w, r, r.PathValue("projectID"))
 }
 
+func (s *Server) resolveFeedback(w http.ResponseWriter, r *http.Request) {
+	s.resolveFeedbackFor(w, r, s.defaultProjectID)
+}
+
+func (s *Server) projectResolveFeedback(w http.ResponseWriter, r *http.Request) {
+	s.resolveFeedbackFor(w, r, r.PathValue("projectID"))
+}
+
+func (s *Server) resolveFeedbackFor(w http.ResponseWriter, r *http.Request, projectID string) {
+	sessionID := r.PathValue("id")
+	feedbackID := r.PathValue("feedbackID")
+
+	s.store.mu.Lock()
+	defer s.store.mu.Unlock()
+
+	project := s.store.Projects[projectID]
+	if project == nil {
+		writeError(w, http.StatusNotFound, errors.New("project not found"))
+		return
+	}
+
+	feedback := project.Feedback[sessionID]
+	found := false
+	for i := range feedback {
+		if feedback[i].ID == feedbackID {
+			feedback[i].Resolved = true
+			now := time.Now().UTC()
+			feedback[i].ResolvedAt = &now
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errors.New("feedback not found"))
+		return
+	}
+	project.Feedback[sessionID] = feedback
+	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
+}
+
 func (s *Server) addFeedbackFor(w http.ResponseWriter, r *http.Request, projectID string) {
 	sessionID := r.PathValue("id")
 	if _, ok := s.session(projectID, sessionID); !ok {
@@ -760,11 +829,14 @@ func (s *Server) agentPayloadFor(w http.ResponseWriter, r *http.Request, project
 	comments := make([]AgentComment, 0, len(session.Feedback))
 	for _, feedback := range session.Feedback {
 		comments = append(comments, AgentComment{
-			FilePath:  feedback.FilePath,
-			StartLine: feedback.StartLine,
-			EndLine:   feedback.EndLine,
-			Body:      feedback.Body,
-			CreatedAt: feedback.CreatedAt,
+			ID:         feedback.ID,
+			FilePath:   feedback.FilePath,
+			StartLine:  feedback.StartLine,
+			EndLine:    feedback.EndLine,
+			Body:       feedback.Body,
+			CreatedAt:  feedback.CreatedAt,
+			Resolved:   feedback.Resolved,
+			ResolvedAt: feedback.ResolvedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string][]AgentComment{"comments": comments})
@@ -793,12 +865,18 @@ func (s *Server) submitReviewFor(w http.ResponseWriter, r *http.Request, project
 
 	comments := make([]AgentComment, 0, len(session.Feedback))
 	for _, feedback := range session.Feedback {
+		if feedback.Resolved {
+			continue
+		}
 		comments = append(comments, AgentComment{
-			FilePath:  feedback.FilePath,
-			StartLine: feedback.StartLine,
-			EndLine:   feedback.EndLine,
-			Body:      feedback.Body,
-			CreatedAt: feedback.CreatedAt,
+			ID:         feedback.ID,
+			FilePath:   feedback.FilePath,
+			StartLine:  feedback.StartLine,
+			EndLine:    feedback.EndLine,
+			Body:       feedback.Body,
+			CreatedAt:  feedback.CreatedAt,
+			Resolved:   feedback.Resolved,
+			ResolvedAt: feedback.ResolvedAt,
 		})
 	}
 

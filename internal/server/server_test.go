@@ -88,8 +88,11 @@ func TestSessionFeedbackAndAgentPayload(t *testing.T) {
 	if comment["startLine"] != float64(1) || comment["endLine"] != float64(2) {
 		t.Fatalf("expected comment line range, got %#v", comment)
 	}
-	if _, ok := comment["id"]; ok {
-		t.Fatalf("expected exported comment without internal id, got %#v", comment)
+	if comment["id"] == nil || comment["id"] == "" {
+		t.Fatalf("expected exported comment to include id for agent resolve, got %#v", comment)
+	}
+	if comment["resolved"] != false {
+		t.Fatalf("expected exported comment to include resolved=false, got %v", comment["resolved"])
 	}
 	if _, ok := comment["sessionId"]; ok {
 		t.Fatalf("expected exported comment without session id, got %#v", comment)
@@ -408,6 +411,124 @@ func TestCreateSessionRejectsPlainDirectoryWithoutInitializingGit(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
 		t.Fatalf("expected no .git directory to be created, stat error: %v", err)
+	}
+}
+
+func TestResolveFeedbackMarksCommentAndExcludesFromSubmit(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	session := postJSON[Session](t, app.Handler(), "/api/sessions", map[string]string{"mode": "working"})
+	fb1 := postJSON[Feedback](t, app.Handler(), "/api/sessions/"+session.ID+"/feedback", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   3,
+		"body":      "Fix this.",
+	})
+	fb2 := postJSON[Feedback](t, app.Handler(), "/api/sessions/"+session.ID+"/feedback", map[string]any{
+		"filePath":  "other.go",
+		"startLine": 10,
+		"endLine":   10,
+		"body":      "Keep this.",
+	})
+
+	_ = fb2
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/sessions/"+session.ID+"/feedback/"+fb1.ID+"/resolve", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH resolve returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	sessions := getJSON[[]Session](t, app.Handler(), "/api/sessions")
+	if len(sessions) != 1 {
+		t.Fatal("expected one session")
+	}
+	var found Feedback
+	for _, fb := range sessions[0].Feedback {
+		if fb.ID == fb1.ID {
+			found = fb
+		}
+	}
+	if !found.Resolved {
+		t.Fatal("expected resolved=true after PATCH")
+	}
+	if found.ResolvedAt == nil {
+		t.Fatal("expected resolvedAt to be set")
+	}
+
+	submitReq := httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/submit-review", nil)
+	submitRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(submitRec, submitReq)
+	if submitRec.Code != http.StatusOK {
+		t.Fatalf("submit returned %d: %s", submitRec.Code, submitRec.Body.String())
+	}
+
+	events := app.Store().GetEventsAfter(session.ID, 0)
+	var review *SubmittedReview
+	for _, e := range events {
+		if e.Type == "review_submitted" && e.Review != nil {
+			review = e.Review
+		}
+	}
+	if review == nil {
+		t.Fatal("expected review_submitted event")
+	}
+	if len(review.Comments) != 1 {
+		t.Fatalf("expected 1 unresolved comment in review, got %d", len(review.Comments))
+	}
+	if review.Comments[0].Body != "Keep this." {
+		t.Fatalf("expected unresolved comment body, got %q", review.Comments[0].Body)
+	}
+}
+
+func TestResolveNonexistentFeedbackReturns404(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	session := postJSON[Session](t, app.Handler(), "/api/sessions", map[string]string{"mode": "working"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/sessions/"+session.ID+"/feedback/fake123/resolve", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for nonexistent feedback, got %d", rec.Code)
+	}
+}
+
+func TestAgentPayloadIncludesResolvedStatus(t *testing.T) {
+	repo := makeRepo(t)
+	app, err := New(repo)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	session := postJSON[Session](t, app.Handler(), "/api/sessions", map[string]string{"mode": "working"})
+	fb := postJSON[Feedback](t, app.Handler(), "/api/sessions/"+session.ID+"/feedback", map[string]any{
+		"filePath":  "main.go",
+		"startLine": 1,
+		"endLine":   1,
+		"body":      "Will be resolved.",
+	})
+
+	resolveReq := httptest.NewRequest(http.MethodPatch, "/api/sessions/"+session.ID+"/feedback/"+fb.ID+"/resolve", nil)
+	resolveRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(resolveRec, resolveReq)
+
+	payload := getJSON[map[string]any](t, app.Handler(), "/api/sessions/"+session.ID+"/agent-payload")
+	comments := payload["comments"].([]any)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+	c := comments[0].(map[string]any)
+	if c["resolved"] != true {
+		t.Fatalf("expected resolved=true in agent payload, got %v", c["resolved"])
 	}
 }
 

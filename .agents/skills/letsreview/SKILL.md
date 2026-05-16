@@ -34,7 +34,7 @@ If `request_code_review` fails with "tool not found" or unknown tool error:
 3. Enter the event polling loop:
    - Call `get_pending_events` every few seconds with the session ID and last event seq
    - On `explanation_requested`: read the explanation request, understand the code context, call `submit_explanation` with a clear answer
-   - On `review_submitted`: call `get_review_result` to get all comments, then APPLY each comment as a code change
+   - On `review_submitted`: call `get_review_result` to get all comments, then APPLY each comment as a code change, then call `resolve_feedback` for each processed comment
    - Update `afterSeq` from `lastSeq` after each poll
 4. After applying review feedback, ask the human if they want another review session to verify the changes
 5. If they agree, go back to step 1
@@ -42,7 +42,8 @@ If `request_code_review` fails with "tool not found" or unknown tool error:
 ## Rules
 
 - ALWAYS apply changes after receiving `review_submitted` feedback — do not just acknowledge, actually edit the files
-- After applying changes, ask the human if they want another review session to verify your fixes
+- After applying each comment's change, call `resolve_feedback` with the comment's `id` to mark it resolved in the web UI
+- After applying all changes, ask the human if they want another review session to verify your fixes
 - When submitting explanations, be concise and specific to the lines asked about
 - Use `get_pending_events` — it never blocks, call it between other work
 - Do not ask the user to manually check the review — poll for events yourself
@@ -61,6 +62,7 @@ Assistant:
 6. When review_submitted arrives with comments like:
    - "main.go:15-20: This function should handle nil input"
    - "auth.go:42: Rename this variable for clarity"
-7. Applies each change to the code
-8. Asks the human if they want to review the changes
+ 7. Applies each change to the code
+ 8. Calls `resolve_feedback` for each applied comment
+ 9. Asks the human if they want to review the changes
 ```
