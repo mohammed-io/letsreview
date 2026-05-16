@@ -33,6 +33,7 @@ type config struct {
 	addr     string
 	help     bool
 	mcp      bool
+	noOpen   bool
 	repoPath string
 	stop     bool
 }
@@ -77,7 +78,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		if joinErr != nil {
 			return fmt.Errorf("listen on %s: %w; join existing server: %v", cfg.addr, err, joinErr)
 		}
-		printProject(stdout, cfg.addr, project)
+		printProject(stdout, cfg.addr, project, cfg.noOpen)
 		return heartbeatLoop(ctx, cfg.addr, project.ID)
 	}
 
@@ -94,7 +95,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 
 	project := projectResponse{ID: projectID(absRepo), RepoPath: absRepo, Repo: filepath.Base(absRepo)}
-	printProject(stdout, listener.Addr().String(), project)
+	printProject(stdout, listener.Addr().String(), project, cfg.noOpen)
 
 	err = app.ServeWithShutdown(ctx, listener)
 	removePIDEntry(pidPath, os.Getpid())
@@ -167,11 +168,13 @@ func heartbeat(ctx context.Context, addr string, projectID string) error {
 	return nil
 }
 
-func printProject(stdout io.Writer, addr string, project projectResponse) {
+func printProject(stdout io.Writer, addr string, project projectResponse, noOpen bool) {
 	url := fmt.Sprintf("http://%s?project=%s", addr, project.ID)
 	fmt.Fprintf(stdout, "letsreview is running at %s\n", url)
 	fmt.Fprintf(stdout, "reviewing %s\n", project.RepoPath)
-	openBrowser(url)
+	if !noOpen {
+		openBrowser(url)
+	}
 }
 
 var openBrowser = func(url string) {
@@ -198,6 +201,7 @@ func parseConfig(args []string) (config, error) {
 	addr := flags.String("addr", defaultAddr, "address to listen on")
 	help := flags.Bool("help", false, "show help")
 	mcpMode := flags.Bool("mcp", false, "run as MCP server over stdio")
+	noOpen := flags.Bool("no-open", false, "don't open browser automatically")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return config{help: true}, nil
@@ -215,7 +219,7 @@ func parseConfig(args []string) (config, error) {
 		}
 	}
 
-	return config{addr: *addr, help: *help, mcp: *mcpMode, repoPath: repoPath, stop: stop}, nil
+	return config{addr: *addr, help: *help, mcp: *mcpMode, noOpen: *noOpen, repoPath: repoPath, stop: stop}, nil
 }
 
 func printUsage(stdout io.Writer) {
@@ -236,6 +240,8 @@ Flags:
         show help
   -mcp
         run as MCP server over stdio
+  -no-open
+        don't open browser automatically
 
 Examples:
   letsreview .

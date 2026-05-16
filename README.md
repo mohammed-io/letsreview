@@ -69,7 +69,7 @@ letsreview [flags] [repo]
 
 ```
 -addr string   listen address (default "127.0.0.1:55492")
--open          print URL only, don't open browser
+-no-open       don't open browser automatically
 ```
 
 `repo` defaults to `.` (current directory).
