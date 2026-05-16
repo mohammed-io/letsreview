@@ -553,6 +553,8 @@ function renderInlineReview() {
   els.inlineReview.style.top = `${anchorY}px`;
   els.inlineReviewTitle.textContent = `Comment on ${rangeLabel(selectedRange, "line")}`;
   renderCommentList(selectedRange.start, selectedRange.end);
+  const exp = explanationsForActiveFile().find((e) => e.startLine === selectedRange.start && e.endLine === selectedRange.end);
+  els.explanation.textContent = exp?.body || "Select diff rows, then ask for an explanation.";
   els.feedback.value = sessionStorage.getItem(draftKey()) || "";
 }
 

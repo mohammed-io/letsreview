@@ -161,13 +161,13 @@ func (m *MCPServer) handleToolsList(req jsonRPCRequest) *jsonRPCResponse {
 				},
 				{
 					"name":        "wait_for_review_event",
-					"description": "Long-poll until the reviewer asks for explanation or submits the review. Returns explanation_requested, review_submitted, or timeout. Pass afterSeq from the previous event to wait for the next one.",
+					"description": "Long-poll until the reviewer asks for explanation or submits the review. Returns explanation_requested, review_submitted, or timeout. Pass afterSeq from the previous event to wait for the next one. On timeout, call again to keep waiting — the reviewer may still be active.",
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"sessionId":      map[string]any{"type": "string", "description": "Session ID from request_code_review"},
 							"afterSeq":       map[string]any{"type": "integer", "description": "Last event sequence already handled"},
-							"timeoutSeconds": map[string]any{"type": "integer", "description": "How long to wait before returning timeout"},
+							"timeoutSeconds": map[string]any{"type": "integer", "description": "How long to wait before returning timeout (default 900, max 86400)"},
 						},
 						"required": []string{"sessionId"},
 					},
@@ -218,13 +218,13 @@ func (m *MCPServer) handleToolsList(req jsonRPCRequest) *jsonRPCResponse {
 				},
 				{
 					"name":        "wait_for_explanation_request",
-					"description": "Long-poll until the reviewer asks for an explanation. Returns one explanation request or timeout. Pass afterSeq from the previous response to wait for the next request.",
+					"description": "Long-poll until the reviewer asks for an explanation. Returns one explanation request or timeout. Pass afterSeq from the previous response to wait for the next request. On timeout, call again to keep waiting.",
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"sessionId":      map[string]any{"type": "string", "description": "Session ID"},
 							"afterSeq":       map[string]any{"type": "integer", "description": "Last event sequence already handled"},
-							"timeoutSeconds": map[string]any{"type": "integer", "description": "How long to wait before returning timeout"},
+							"timeoutSeconds": map[string]any{"type": "integer", "description": "How long to wait before returning timeout (default 900, max 86400)"},
 						},
 						"required": []string{"sessionId"},
 					},
@@ -523,7 +523,7 @@ func (m *MCPServer) toolSubmitExplanation(raw json.RawMessage) (any, error) {
 
 func normalizedTimeout(seconds int) time.Duration {
 	if seconds <= 0 {
-		return time.Hour
+		return 15 * time.Minute
 	}
 	if seconds > 86400 {
 		seconds = 86400
