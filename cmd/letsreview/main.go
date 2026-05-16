@@ -23,8 +23,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mohammed/letsreview/internal/mcp"
-	"github.com/mohammed/letsreview/internal/server"
+	"github.com/mohammed-io/letsreview/internal/mcp"
+	"github.com/mohammed-io/letsreview/internal/server"
 )
 
 const defaultAddr = "127.0.0.1:55492"

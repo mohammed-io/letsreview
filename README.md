@@ -11,7 +11,7 @@ AI agents write hundreds of lines per commit. `letsreview` gives you a fast, loc
 ## Install
 
 ```sh
-go install github.com/mohammed-io/letsreview/cmd/letsreview@latest
+go install github.com/mohammed-io/letsreview/cmd/letsreview@v0.0.0
 ```
 
 Or build from source:

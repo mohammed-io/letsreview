@@ -15,8 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mohammed/letsreview/internal/gitdiff"
-	"github.com/mohammed/letsreview/internal/server"
+	"github.com/mohammed-io/letsreview/internal/gitdiff"
+	"github.com/mohammed-io/letsreview/internal/server"
+"github.com/mohammed-io/letsreview"
 )
 
 const protocolVersion = "2024-11-05"
@@ -173,7 +174,7 @@ func (m *MCPServer) handleInitialize(req jsonRPCRequest) *jsonRPCResponse {
 				"tools":         map[string]any{},
 				"subscriptions": map[string]any{},
 			},
-			"serverInfo": map[string]string{"name": "letsreview", "version": "0.1.0"},
+			"serverInfo": map[string]string{"name": "letsreview", "version": letsreview.Version},
 		},
 	}
 }

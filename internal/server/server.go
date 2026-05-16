@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mohammed/letsreview/internal/gitdiff"
+	"github.com/mohammed-io/letsreview/internal/gitdiff"
 )
 
 //go:embed web/*
