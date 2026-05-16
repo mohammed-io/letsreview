@@ -1,69 +1,65 @@
 # letsreview
 
-Local web UI for reviewing Git diffs, collecting line feedback, and handing that feedback back to an AI agent through MCP.
+AI agents write hundreds of lines per commit. `letsreview` gives you a fast, local web UI to review all of it and send feedback straight back to your agent — no pull requests, no manual change referencing. Vim-style keyboard controls (`j`/`k` to navigate, `Shift+j`/`Shift+k` to extend selection) so you never have to reach for the mouse.
 
-`letsreview` is intentionally local-first:
+![letsreview screenshot](./screenshot.png)
 
-- no repo initialization
-- no cloud service
-- no background database
-- no network AI calls by default
-- one Go binary for CLI/web UI/MCP
+**The problem:** Your agent just rewrote half the codebase. You could make a branch, open a pull request, and review it there. But that flow was built for humans collaborating asynchronously, not for reviewing your own agent's work in real time.
 
-## Status
-
-Early local tool. Core flows exist:
-
-- live working-tree diff
-- snapshot review sessions
-- multiple repos in one running server
-- canvas diff rendering
-- line comments
-- viewed files
-- submit review for agent pickup
-- MCP review request/result tools
-- MCP explanation request/response tools
+**The fix:** Start a review session from your terminal (or let your agent start it). Review the diff in your browser. Leave line comments. Hit submit. Your agent gets the feedback and keeps going.
 
 ## Install
-
-With Go (installs latest from GitHub):
 
 ```sh
 go install github.com/mohammed-io/letsreview/cmd/letsreview@latest
 ```
-
-This places `letsreview` in `$GOPATH/bin` (or `$HOME/go/bin`). Make sure it's on your `PATH`.
 
 Or build from source:
 
 ```sh
 git clone https://github.com/mohammed-io/letsreview.git
 cd letsreview
-go build -o letsreview ./cmd/letsreview
+make build
 ```
 
-## Run
+The binary goes into `$GOPATH/bin` (usually `$HOME/go/bin`). Add it to your `PATH` if needed.
+
+## Quick start
 
 ```sh
-./letsreview /path/to/git/repo
+letsreview /path/to/repo
 ```
 
-Default address:
+Opens a browser showing your working tree diff. Click lines, write comments, submit. Your agent picks up the feedback through MCP.
 
-```txt
-127.0.0.1:55492
+You can also let the agent kick things off — it calls `request_code_review`, your browser opens, and it waits for your review.
+
+## How it works
+
+```
+  Your agent                letsreview               You
+  (Claude/Codex/     stdio JSON-RPC         HTTP + browser
+   OpenCode)          (MCP tools)
+      │                    │                      │
+      │ request_code_review│                      │
+      │───────────────────►│ opens browser        │
+      │                    │─────────────────────►│
+      │                    │                      │ review code,
+      │                    │                      │ write comments
+      │                    │  submit review       │
+      │                    │◄─────────────────────│
+      │ get_pending_events │                      │
+      │───────────────────►│                      │
+      │ review_submitted   │                      │
+      │◄───────────────────│                      │
+      │                    │                      │
+      │ get_review_result  │                      │
+      │───────────────────►│                      │
+      │ { comments, ... }  │                      │
+      │◄───────────────────│                      │
 ```
 
-Output looks like:
-
-```txt
-letsreview is running at http://127.0.0.1:55492?project=<project-id>
-reviewing /path/to/git/repo
-```
-
-Open URL in browser.
-
-![letsreview screenshot](./screenshot.png)
+You can submit multiple reviews per session. Each one creates a new event the agent receives. No one-shot lockout.
 
 ## CLI
 
@@ -71,51 +67,59 @@ Open URL in browser.
 letsreview [flags] [repo]
 ```
 
-Flags:
-
-```txt
--addr string   address to listen on (default "127.0.0.1:55492")
--open          print browser-open hint only; browser launch is left to caller
+```
+-addr string   listen address (default "127.0.0.1:55492")
+-open          print URL only, don't open browser
 ```
 
-`repo` defaults to current directory.
+`repo` defaults to `.` (current directory).
 
-## MCP
+### Multiple repos in one server
 
-Run MCP server:
+The first `letsreview` process starts the server. If you run another one with the same address, it registers its repo with the existing server instead of starting a second one. All repos share one UI.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Move selection |
+| `Shift+j` / `Shift+k` | Extend selection (multi-line) |
+| `Space` | Open inline review |
+| `n` / `p` | Next / previous file |
+| `v` | Toggle file viewed |
+| `Cmd+Enter` | Save feedback or submit review |
+
+## MCP tools
+
+Run the MCP server:
 
 ```sh
-./letsreview --mcp
+letsreview --mcp
 ```
 
-Optional address override:
+| Tool | What it does |
+|------|-------------|
+| `request_code_review` | Creates session, opens browser, returns `sessionId` + `lastEventSeq` |
+| `get_pending_events` | Non-blocking poll for new events since last `seq` |
+| `get_review_result` | Returns latest submitted review with all comments |
+| `submit_explanation` | Responds to an explanation request from the reviewer |
+| `cancel_review` | Cancels a review session |
 
-```sh
-./letsreview --mcp -addr 127.0.0.1:55492
-```
+Events you can receive from `get_pending_events`:
 
-Main MCP tools:
+- `explanation_requested` — reviewer selected code and wants an explanation
+- `explanation_submitted` — agent sent an explanation back
+- `review_submitted` — reviewer submitted comments
 
-- `request_code_review` — start review session, open browser
-- `get_pending_events` — non-blocking poll for new events (review_submitted, explanation_requested, explanation_submitted)
-- `get_review_result` — get latest submitted review comments
-- `cancel_review` — cancel a review session
-- `submit_explanation` — respond to an explanation request
+Full details in [HANDBOOK.md](./HANDBOOK.md).
 
-See [HANDBOOK.md](./HANDBOOK.md) for full usage.
+## MCP client setup
 
-## Configure MCP Clients
-
-Build and place the binary somewhere on your PATH:
-
-```sh
-go build -o letsreview ./cmd/letsreview
-mv letsreview /usr/local/bin/
-```
+First, make sure `letsreview` is on your `PATH`.
 
 ### Claude Code
 
-Add to your project's `.mcp.json`:
+Project-level `.mcp.json` or global `~/.claude/mcp.json`:
 
 ```json
 {
@@ -128,11 +132,9 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Or globally in `~/.claude/mcp.json`.
-
 ### Codex (OpenAI)
 
-Add to `~/.codex/mcp.json`:
+`~/.codex/mcp.json`:
 
 ```json
 {
@@ -147,7 +149,7 @@ Add to `~/.codex/mcp.json`:
 
 ### OpenCode
 
-Add to your project's `opencode.json`:
+Project-level `opencode.json`:
 
 ```json
 {
@@ -160,12 +162,13 @@ Add to your project's `opencode.json`:
 }
 ```
 
-All clients communicate via stdio JSON-RPC. No API keys needed — everything runs locally.
+Everything runs locally over stdio. No API keys, no cloud.
 
 ## Development
 
 ```sh
-GOCACHE=/private/tmp/letsreview-gocache go test ./...
-GOCACHE=/private/tmp/letsreview-gocache go vet ./...
-GOCACHE=/private/tmp/letsreview-gocache go build ./cmd/letsreview
+make build    # build binary
+make test     # run tests
+make vet      # run go vet
+make clean    # remove binary
 ```
