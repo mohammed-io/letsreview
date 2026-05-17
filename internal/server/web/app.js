@@ -1053,8 +1053,8 @@ function registerReviewKeyboardNavigation() {
     "?": () => els.shortcutsModal.classList.add("visible"),
     tab: () => toggleFocusZone(),
     " ": () => openInlineReviewForSelection({ focusInput: state.focusZone === "diff" }),
-    arrowdown: () => zoneMotion(1),
-    arrowup: () => zoneMotion(-1),
+    arrowdown: () => isShiftPressed() ? zoneExtend(1) : zoneMotion(1),
+    arrowup: () => isShiftPressed() ? zoneExtend(-1) : zoneMotion(-1),
     j: () => isShiftPressed() ? zoneExtend(1) : zoneMotion(1),
     k: () => isShiftPressed() ? zoneExtend(-1) : zoneMotion(-1),
     i: () => {
