@@ -190,7 +190,7 @@ rm -f internal/version/version.go.bak
 sed -i.bak "s|mohammed-io/letsreview@v[0-9.]*|mohammed-io/letsreview@$VERSION_TAG|g" README.md
 rm -f README.md.bak
 
-git add version.go README.md "$CHANGELOG_FILE"
+git add internal/version/version.go README.md "$CHANGELOG_FILE"
 git commit -m "chore: release $VERSION_TAG"
 
 git tag "$VERSION_TAG"

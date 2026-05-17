@@ -1,3 +1,11 @@
+## [v0.0.4] - 2026-05-17
+
+[Full Changelog](https://github.com/mohammed-io/letsreview/compare/v0.0.3...v0.0.4)
+
+### Changed
+- move main package to root for shorter go install path ([bf5a53f](https://github.com/mohammed-io/letsreview/commit/bf5a53f976f6368af426295c2807371b88c84844))
+
+
 ## [v0.0.3] - 2026-05-17
 
 [Full Changelog](https://github.com/mohammed-io/letsreview/compare/v0.0.2...v0.0.3)
