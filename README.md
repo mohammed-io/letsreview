@@ -8,6 +8,12 @@ AI agents write hundreds of lines per commit. `letsreview` gives you a fast, loc
 
 **The fix:** Start a review session from your terminal (or let your agent start it). Review the diff in your browser. Leave line comments. Hit submit. Your agent gets the feedback and keeps going.
 
+## Philosophy
+
+I find it awkward to review code in my IDE. IDEs are for writing code. When I'm in one, I'm in "code mode" — I want to build, not judge. GitHub UI puts me in "review mode." That's why PRs work: different context, different mindset.
+
+The chat pane in your IDE would achieve the same outcome as this one — if you don't mind reviewing the code in your IDE! In addition to mindset switching; I am a TUI guy, I prefer driving agents from terminal harnesses like Claude Code, Codex, or OpenCode. `letsreview` gives me a review-mode experience in the browser without going through a PR flow that was designed for async human collaboration.
+
 ## Install
 
 ```sh
