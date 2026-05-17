@@ -184,10 +184,10 @@ for entry in "${CHANGELOG_ENTRIES[@]}"; do
 done
 echo ""
 
-sed -i.bak "s/var Version = \".*\"/var Version = \"$VERSION_TAG\"/" version.go
-rm -f version.go.bak
+sed -i.bak "s/var Version = \".*\"/var Version = \"$VERSION_TAG\"/" internal/version/version.go
+rm -f internal/version/version.go.bak
 
-sed -i.bak "s|mohammed-io/letsreview/cmd/letsreview@v[0-9.]*|mohammed-io/letsreview/cmd/letsreview@$VERSION_TAG|g" README.md
+sed -i.bak "s|mohammed-io/letsreview@v[0-9.]*|mohammed-io/letsreview@$VERSION_TAG|g" README.md
 rm -f README.md.bak
 
 git add version.go README.md "$CHANGELOG_FILE"

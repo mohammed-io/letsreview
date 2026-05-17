@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 build:
-	go build -o letsreview ./cmd/letsreview
+	go build -o letsreview .
 
 test:
 	GOCACHE=/private/tmp/letsreview-gocache go test ./...

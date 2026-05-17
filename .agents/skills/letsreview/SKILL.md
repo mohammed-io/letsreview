@@ -12,7 +12,7 @@ Start a code review session with the human reviewer.
 ## Error Recovery
 
 If `request_code_review` fails with "tool not found" or unknown tool error:
-- Tell the user to install letsreview: `go install github.com/mohammed-io/letsreview/cmd/letsreview@latest`
+- Tell the user to install letsreview: `go install github.com/mohammed-io/letsreview@latest`
 - Tell the user to add MCP config (`.mcp.json` for Claude Code, `~/.codex/mcp.json` for Codex, `opencode.json` for OpenCode):
   ```json
   {

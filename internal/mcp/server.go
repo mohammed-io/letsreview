@@ -17,7 +17,7 @@ import (
 
 	"github.com/mohammed-io/letsreview/internal/gitdiff"
 	"github.com/mohammed-io/letsreview/internal/server"
-"github.com/mohammed-io/letsreview"
+	"github.com/mohammed-io/letsreview/internal/version"
 )
 
 const protocolVersion = "2024-11-05"
@@ -174,7 +174,7 @@ func (m *MCPServer) handleInitialize(req jsonRPCRequest) *jsonRPCResponse {
 				"tools":         map[string]any{},
 				"subscriptions": map[string]any{},
 			},
-			"serverInfo": map[string]string{"name": "letsreview", "version": letsreview.Version},
+			"serverInfo": map[string]string{"name": "letsreview", "version": version.Version},
 		},
 	}
 }

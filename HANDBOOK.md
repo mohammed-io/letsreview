@@ -21,13 +21,13 @@ The app never initializes Git repos. It accepts a path, but diff loading expects
 From repo root:
 
 ```sh
-go build -o letsreview ./cmd/letsreview
+go build -o letsreview .
 ```
 
 During sandboxed/local dev, use writable Go cache if needed:
 
 ```sh
-GOCACHE=/private/tmp/letsreview-gocache go build -o letsreview ./cmd/letsreview
+GOCACHE=/private/tmp/letsreview-gocache go build -o letsreview .
 ```
 
 ## Start UI
@@ -694,5 +694,5 @@ GOCACHE=/private/tmp/letsreview-gocache go vet ./...
 Before release/build:
 
 ```sh
-GOCACHE=/private/tmp/letsreview-gocache go build ./cmd/letsreview
+GOCACHE=/private/tmp/letsreview-gocache go build .
 ```

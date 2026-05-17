@@ -32,12 +32,12 @@ You are working on `letsreview`: Go CLI + local web UI + MCP server for human-in
 ```sh
 GOCACHE=/private/tmp/letsreview-gocache go test ./...
 GOCACHE=/private/tmp/letsreview-gocache go vet ./...
-GOCACHE=/private/tmp/letsreview-gocache go build ./cmd/letsreview
+GOCACHE=/private/tmp/letsreview-gocache go build .
 ```
 
 ## Architecture
 
-- `cmd/letsreview`: user CLI, starts/join local web server, and `mcp` subcommand for stdio server mode.
+- Root package: user CLI, starts/join local web server, and `mcp` subcommand for stdio server mode.
 - `internal/gitdiff`: Git diff command + unified diff parser.
 - `internal/server`: HTTP API, in-memory projects/sessions/comments/explanations.
 - `internal/server/web`: embedded browser UI.
