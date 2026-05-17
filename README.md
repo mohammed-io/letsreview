@@ -17,7 +17,7 @@ The chat pane in your IDE would achieve the same outcome as this one — if you 
 ## Install
 
 ```sh
-go install github.com/mohammed-io/letsreview/cmd/letsreview@v0.0.2
+go install github.com/mohammed-io/letsreview/cmd/letsreview@v0.0.3
 ```
 
 Or build from source:

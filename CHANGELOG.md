@@ -1,3 +1,24 @@
+## [v0.0.3] - 2026-05-17
+
+[Full Changelog](https://github.com/mohammed-io/letsreview/compare/v0.0.2...v0.0.3)
+
+### Added
+- shift+arrow keys extend selection like shift+j/k ([414aaf3](https://github.com/mohammed-io/letsreview/commit/414aaf357744d99135e31861605898e17d97b48f))
+
+### Changed
+- add agent work file ([48d136b](https://github.com/mohammed-io/letsreview/commit/48d136b2c8b7255fe2a8c5dbdae33dbb08b9b6b8))
+- Add philosophy section ([7b7e1d8](https://github.com/mohammed-io/letsreview/commit/7b7e1d8f115de0080e6bda3c60eff88183c44b06))
+- remove cmd/mcp legacy entrypoint ([d29a1fe](https://github.com/mohammed-io/letsreview/commit/d29a1fe2a070a34b2a78085a797e429fc8de86ca))
+- remove sessions mode, live-only UI with polling ([45ba553](https://github.com/mohammed-io/letsreview/commit/45ba5532a7ff6092660bcb66b4051a16e4c70913))
+
+<details>
+<summary>Other</summary>
+
+- Clean up ([73b215e](https://github.com/mohammed-io/letsreview/commit/73b215e6014cdec153fff6382ca594ec19494cb3))
+
+</details>
+
+
 ## [v0.0.2] - 2026-05-16
 
 [Full Changelog](https://github.com/mohammed-io/letsreview/compare/v0.0.1...v0.0.2)
